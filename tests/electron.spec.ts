@@ -747,8 +747,11 @@ test("主窗口和便签窗口关键流程", async () => {
     const firstShelfItem = shelf!.locator(".note-list-item").filter({ hasText: "QA 便签" });
     await firstShelfItem.evaluate((item) => {
       const row = item as HTMLButtonElement;
-      row.setPointerCapture = () => {};
-      row.hasPointerCapture = () => false;
+      const list = row.closest<HTMLElement>(".note-list");
+      if (!list) throw new Error("侧边便签列表不存在");
+      list.setPointerCapture = () => {};
+      list.hasPointerCapture = () => false;
+      list.releasePointerCapture = () => {};
       const pointerId = 23;
       const screenX = window.screenX + 90;
       const screenY = window.screenY + 62;
@@ -779,12 +782,63 @@ test("主窗口和便签窗口关键流程", async () => {
     expect(revealState.alwaysOnTop).toBe(true);
     expect(revealState.bounds!.width).toBeLessThan(360);
     expect(await readNoteDockState(window, firstNoteId)).toBe("shelf");
+    await expect(firstShelfItem).toHaveClass(/is-drag-source/);
+    await expect(firstShelfItem).toHaveCSS("opacity", "0");
+    await firstShelfItem.evaluate((item) => {
+      item.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        buttons: 1,
+        isPrimary: true,
+        pointerId: 23,
+        screenX: window.screenX + 90,
+        screenY: window.screenY + 62,
+      }));
+    });
+    await expect(shelf!.locator(".note-list-drop-slot")).toBeVisible();
+    await expect(firstShelfItem).toHaveClass(/is-drag-source/);
     await firstShelfItem.evaluate((item) => {
       item.dispatchEvent(new PointerEvent("pointerup", {
         bubbles: true,
         button: 0,
         isPrimary: true,
         pointerId: 23,
+      }));
+    });
+    await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("shelf");
+    await expect.poll(() => readWindowVisible(window.url())).toBe(false);
+    await expect(shelf!.locator(".note-list-item")).toHaveCount(2);
+    await firstShelfItem.evaluate((item) => {
+      const row = item as HTMLButtonElement;
+      const list = row.closest<HTMLElement>(".note-list");
+      if (!list) throw new Error("侧边便签列表不存在");
+      list.setPointerCapture = () => {};
+      list.hasPointerCapture = () => false;
+      list.releasePointerCapture = () => {};
+      const pointerId = 24;
+      const screenX = window.screenX + 90;
+      const screenY = window.screenY + 62;
+      row.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX,
+        screenY,
+      }));
+      row.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX: screenX + 160,
+        screenY: screenY + 90,
+      }));
+      row.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerId,
       }));
     });
     await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("free");
@@ -797,7 +851,11 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await shelf!.evaluate(() => window.noteAPI.setShelfExpanded(false));
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(36);
-    const collapsedShelfBounds = await readShelfBounds();
+    await shelf!.evaluate(() => window.noteAPI.setShelfExpanded(true));
+    await shelf!.waitForTimeout(40);
+    const transitioningShelfBounds = await readShelfBounds();
+    expect(transitioningShelfBounds!.width).toBeGreaterThan(36);
+    expect(transitioningShelfBounds!.width).toBeLessThan(200);
     const firstTitleBar = window.locator(".title-bar");
     await firstTitleBar.evaluate((titleBar, target) => {
       const bar = titleBar as HTMLElement;
@@ -824,7 +882,7 @@ test("主窗口和便签窗口关键流程", async () => {
         screenX: targetX,
         screenY: targetY,
       }));
-    }, collapsedShelfBounds!);
+    }, transitioningShelfBounds!);
     await window.waitForTimeout(40);
     const previewState = await app.evaluate(({ BrowserWindow }, url) => {
       const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);

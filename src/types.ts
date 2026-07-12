@@ -101,8 +101,8 @@ export interface NoteAPI {
   beginShelfMove: () => void;
   moveShelf: (deltaX: number, deltaY: number) => void;
   endShelfMove: () => void;
-  beginShelfNoteDrag: (id: string, pointerX: number, pointerY: number) => void;
-  moveShelfNoteDrag: (id: string, pointerX: number, pointerY: number) => void;
+  beginShelfNoteDrag: (id: string, pointerX: number, pointerY: number, sourceBounds: WindowBounds) => void;
+  moveShelfNoteDrag: (id: string, pointerX: number, pointerY: number, dropBounds: WindowBounds | null) => void;
   endShelfNoteDrag: (id: string) => void;
   getSyncSettings: () => Promise<SyncSettings>;
   getSyncStatus: () => Promise<SyncStatus>;

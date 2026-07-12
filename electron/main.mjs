@@ -190,14 +190,14 @@ function registerIpc() {
     if (validWindowDelta(deltaX) && validWindowDelta(deltaY)) windows.moveShelf(deltaX, deltaY, event.sender);
   });
   ipcMain.on("shelf:move-end", (event) => windows.endShelfMove(event.sender));
-  ipcMain.on("shelf:note-drag-start", (event, id, pointerX, pointerY) => {
+  ipcMain.on("shelf:note-drag-start", (event, id, pointerX, pointerY, sourceBounds) => {
     if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
-      windows.beginShelfNoteDrag(validId(id), pointerX, pointerY, event.sender);
+      windows.beginShelfNoteDrag(validId(id), pointerX, pointerY, validWindowBounds(sourceBounds), event.sender);
     }
   });
-  ipcMain.on("shelf:note-drag", (event, id, pointerX, pointerY) => {
+  ipcMain.on("shelf:note-drag", (event, id, pointerX, pointerY, dropBounds) => {
     if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
-      windows.moveShelfNoteDrag(validId(id), pointerX, pointerY, event.sender);
+      windows.moveShelfNoteDrag(validId(id), pointerX, pointerY, validWindowBounds(dropBounds), event.sender);
     }
   });
   ipcMain.on("shelf:note-drag-end", (event, id) => windows.endShelfNoteDrag(validId(id), event.sender));
@@ -361,6 +361,20 @@ function validWindowSize(value) {
   const entries = [value.width, value.height];
   if (!entries.every((entry) => Number.isFinite(entry) && Math.abs(entry) <= 1_000_000)) return null;
   return {
+    width: Math.round(value.width),
+    height: Math.round(value.height),
+  };
+}
+
+function validWindowBounds(value) {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== "object") return null;
+  const entries = [value.x, value.y, value.width, value.height];
+  if (!entries.every((entry) => Number.isFinite(entry) && Math.abs(entry) <= 1_000_000)) return null;
+  if (value.width <= 0 || value.height <= 0) return null;
+  return {
+    x: Math.round(value.x),
+    y: Math.round(value.y),
     width: Math.round(value.width),
     height: Math.round(value.height),
   };

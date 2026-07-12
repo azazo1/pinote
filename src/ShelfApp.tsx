@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { IconButton } from "./components/IconButton";
 import { NoteList } from "./components/NoteList";
 import { shouldStartShelfDrag } from "./lib/shelf-drag";
-import type { NoteSummary, ShelfPlacementEdge } from "./types";
+import type { NoteSummary, ShelfPlacementEdge, WindowBounds } from "./types";
 
 const SHELF_HOVER_EXPAND_DELAY_MS = 720;
 
@@ -22,6 +22,8 @@ export default function ShelfApp() {
   const [expanded, setExpanded] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
+  const [dragReturnIndex, setDragReturnIndex] = useState<number | null>(null);
+  const [shelfOrder, setShelfOrder] = useState<string[]>([]);
   const [placement, setPlacement] = useState<ShelfPlacementEdge>(() => {
     const edge = new URLSearchParams(window.location.search).get("edge");
     return edge === "left" || edge === "free" ? edge : "right";
@@ -29,6 +31,8 @@ export default function ShelfApp() {
   const hoverTimer = useRef<number | null>(null);
   const drag = useRef<ShelfDrag | null>(null);
   const noteDragId = useRef<string | null>(null);
+  const noteDragExited = useRef(false);
+  const noteDropIndex = useRef<number | null>(null);
   const suppressClick = useRef(false);
   const moveFrame = useRef<number | null>(null);
   const pendingMove = useRef<{ deltaX: number; deltaY: number } | null>(null);
@@ -54,7 +58,14 @@ export default function ShelfApp() {
     }, SHELF_HOVER_EXPAND_DELAY_MS);
   }
 
-  const dockedNotes = notes.filter((note) => note.dockState === "shelf");
+  const dockedNotes = notes
+    .filter((note) => note.dockState === "shelf")
+    .sort((left, right) => {
+      const leftIndex = shelfOrder.indexOf(left.id);
+      const rightIndex = shelfOrder.indexOf(right.id);
+      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex)
+        - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    });
 
   function flushMove() {
     if (moveFrame.current !== null) {
@@ -97,8 +108,17 @@ export default function ShelfApp() {
   }
 
   useEffect(() => {
-    void window.noteAPI.listNotes().then(setNotes);
-    const offList = window.noteAPI.onNoteList(setNotes);
+    function updateNotes(nextNotes: NoteSummary[]) {
+      setNotes(nextNotes);
+      setShelfOrder((current) => {
+        const dockedIds = nextNotes.filter((note) => note.dockState === "shelf").map((note) => note.id);
+        const retained = current.filter((id) => dockedIds.includes(id));
+        return [...retained, ...dockedIds.filter((id) => !retained.includes(id))];
+      });
+    }
+
+    void window.noteAPI.listNotes().then(updateNotes);
+    const offList = window.noteAPI.onNoteList(updateNotes);
     const offExpanded = window.noteAPI.onShelfExpanded(setExpanded);
     const offPlacement = window.noteAPI.onShelfPlacement(setPlacement);
     return () => {
@@ -183,22 +203,63 @@ export default function ShelfApp() {
     expandShelf();
   }
 
-  function beginNoteDrag(id: string, screenX: number, screenY: number) {
+  function beginNoteDrag(id: string, screenX: number, screenY: number, sourceBounds: WindowBounds) {
     cancelHover();
     window.noteAPI.cancelGroupHide();
     noteDragId.current = id;
+    noteDragExited.current = false;
+    noteDropIndex.current = null;
     setDraggingNoteId(id);
-    window.noteAPI.beginShelfNoteDrag(id, screenX, screenY);
+    setDragReturnIndex(null);
+    window.noteAPI.beginShelfNoteDrag(id, screenX, screenY, sourceBounds);
   }
 
   function moveNoteDrag(id: string, screenX: number, screenY: number) {
-    window.noteAPI.moveShelfNoteDrag(id, screenX, screenY);
+    const nextIndex = shelfDropIndex(id, screenX, screenY);
+    if (nextIndex === null) noteDragExited.current = true;
+    const returnIndex = noteDragExited.current ? nextIndex : null;
+    noteDropIndex.current = returnIndex;
+    setDragReturnIndex(returnIndex);
+    window.noteAPI.moveShelfNoteDrag(id, screenX, screenY, returnIndex === null ? null : shelfDropTarget(returnIndex));
   }
 
   function endNoteDrag(id: string) {
+    const dropIndex = noteDropIndex.current;
+    if (dropIndex !== null) {
+      setShelfOrder((current) => {
+        const next = current.filter((noteId) => noteId !== id);
+        next.splice(Math.min(Math.max(0, dropIndex), next.length), 0, id);
+        return next;
+      });
+    }
     noteDragId.current = null;
+    noteDragExited.current = false;
+    noteDropIndex.current = null;
     setDraggingNoteId(null);
+    setDragReturnIndex(null);
     window.noteAPI.endShelfNoteDrag(id);
+  }
+
+  function shelfDropIndex(id: string, screenX: number, screenY: number) {
+    const clientX = screenX - window.screenX;
+    const clientY = screenY - window.screenY;
+    if (clientX < 0 || clientX > window.innerWidth || clientY < 0 || clientY > window.innerHeight) return null;
+    const rows = [...document.querySelectorAll<HTMLElement>(".note-list-item")]
+      .filter((row) => row.dataset.noteId !== id && !row.classList.contains("is-drag-source"));
+    const index = rows.findIndex((row) => clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
+    return index < 0 ? rows.length : index;
+  }
+
+  function shelfDropTarget(index: number): WindowBounds | null {
+    const list = document.querySelector<HTMLElement>(".note-list");
+    if (!list) return null;
+    const bounds = list.getBoundingClientRect();
+    return {
+      x: Math.round(window.screenX + bounds.left),
+      y: Math.round(window.screenY + bounds.top - list.scrollTop + index * 32),
+      width: Math.round(bounds.width),
+      height: 32,
+    };
   }
 
   return (
@@ -251,6 +312,7 @@ export default function ShelfApp() {
         <NoteList
           notes={dockedNotes}
           draggingId={draggingNoteId}
+          dragReturnIndex={dragReturnIndex}
           onSelect={(id) => void window.noteAPI.activateDockedNote(id)}
           onDragStart={beginNoteDrag}
           onDragMove={moveNoteDrag}

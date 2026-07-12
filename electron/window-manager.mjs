@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
-import { isPointNearBounds } from "./windowing/shelf-proximity.mjs";
+import { isPointNearBounds, SHELF_DOCK_PROXIMITY } from "./windowing/shelf-proximity.mjs";
 import { snapBounds } from "./windowing/snap-bounds.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -404,7 +404,8 @@ export class WindowManager {
     }
     const snapped = snapBounds(proposed, targets, display.workArea);
     session.fullBounds = { ...snapped, width: proposed.width, height: proposed.height };
-    session.nearShelf = !wasDocked && this.shouldDockAtShelf({ x: pointerX, y: pointerY });
+    const proximityHysteresis = session.previewing || session.returning ? 16 : 0;
+    session.nearShelf = !wasDocked && this.shouldDockAtShelf({ x: pointerX, y: pointerY }, proximityHysteresis);
     if (session.nearShelf) {
       if (!session.previewing) this.beginShelfDockPreview(id, window, session);
       return true;
@@ -435,15 +436,30 @@ export class WindowManager {
     return true;
   }
 
-  shouldDockAtShelf(point) {
+  shouldDockAtShelf(point, proximityHysteresis = 0) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return false;
     const shelf = this.shelfWindow;
     if (!shelf || shelf.isDestroyed()) return false;
     const display = screen.getDisplayMatching(shelf.getBounds());
-    return isPointNearBounds(point, this.shelfBounds(display, false));
+    return isPointNearBounds(point, shelf.getBounds(), 8 + proximityHysteresis)
+      || isPointNearBounds(point, this.shelfBounds(display, false), SHELF_DOCK_PROXIMITY + proximityHysteresis);
   }
 
-  shelfNoteTransitionBounds(shelf) {
+  shelfNoteTransitionBounds(shelf, requestedBounds = null, dropIndex = null) {
+    if (requestedBounds) return requestedBounds;
+    const shelfBounds = shelf.getBounds();
+    const expandedLike = this.shelfExpanded || shelfBounds.width > SHELF_COLLAPSED_SIZE + 16;
+    if (expandedLike) {
+      const dockedCount = this.store.listDockedNotes("shelf").length;
+      const index = Number.isInteger(dropIndex) ? dropIndex : Math.max(0, dockedCount - 1);
+      const width = Math.max(SHELF_NOTE_TRANSITION_SIZE, Math.min(SHELF_EXPANDED_WIDTH - 12, shelfBounds.width - 12));
+      return {
+        x: shelfBounds.x + 6,
+        y: clampValue(shelfBounds.y + 40 + index * 32, shelfBounds.y + 6, shelfBounds.y + shelfBounds.height - 32),
+        width,
+        height: 32,
+      };
+    }
     const display = screen.getDisplayMatching(shelf.getBounds());
     const ball = this.shelfBounds(display, false);
     return {
@@ -489,7 +505,8 @@ export class WindowManager {
     this.beginNoteTransition(id, window);
     const shelf = this.shelfWindow;
     if (!shelf || shelf.isDestroyed()) return;
-    this.animateBounds(window, this.shelfNoteTransitionBounds(shelf), SHELF_NOTE_TRANSITION_MS);
+    const dropIndex = this.store.listDockedNotes("shelf").length;
+    this.animateBounds(window, this.shelfNoteTransitionBounds(shelf, null, dropIndex), SHELF_NOTE_TRANSITION_MS);
   }
 
   returnFromShelfDockPreview(id, window, session) {
@@ -794,7 +811,7 @@ export class WindowManager {
     return true;
   }
 
-  beginShelfNoteDrag(id, pointerX, pointerY, sender) {
+  beginShelfNoteDrag(id, pointerX, pointerY, sourceBounds, sender) {
     const shelf = this.shelfWindow;
     if (
       this.getDockMode() !== "shelf"
@@ -832,9 +849,11 @@ export class WindowManager {
       pointerY,
       revealing: true,
       releasePending: false,
+      overShelf: this.shouldDockAtShelf({ x: pointerX, y: pointerY }),
+      dropBounds: null,
     };
     this.beginNoteTransition(id, window);
-    const start = this.shelfNoteTransitionBounds(shelf);
+    const start = sourceBounds ?? this.shelfNoteTransitionBounds(shelf);
     window.setBounds(start, false);
     window.showInactive();
     this.animateShelfNoteReveal(window, this.shelfNoteDragSession, start);
@@ -842,7 +861,7 @@ export class WindowManager {
     return true;
   }
 
-  moveShelfNoteDrag(id, pointerX, pointerY, sender) {
+  moveShelfNoteDrag(id, pointerX, pointerY, dropBounds, sender) {
     const session = this.shelfNoteDragSession;
     const window = this.windows.get(id);
     if (
@@ -854,6 +873,8 @@ export class WindowManager {
     ) return false;
     session.pointerX = pointerX;
     session.pointerY = pointerY;
+    session.overShelf = this.shouldDockAtShelf({ x: pointerX, y: pointerY }, session.overShelf ? 16 : 0);
+    session.dropBounds = session.overShelf ? dropBounds : null;
     if (!session.revealing) window.setBounds(this.shelfNoteDragBounds(session), false);
     return true;
   }
@@ -903,6 +924,22 @@ export class WindowManager {
   finishShelfNoteDrag(detach) {
     const session = this.shelfNoteDragSession;
     if (!session) return false;
+    if (detach && session.overShelf) {
+      this.shelfNoteDragSession = null;
+      const window = this.windows.get(session.id);
+      const shelf = this.shelfWindow;
+      if (!window || window.isDestroyed() || !shelf || shelf.isDestroyed()) return false;
+      this.beginNoteTransition(session.id, window);
+      const target = this.shelfNoteTransitionBounds(shelf, session.dropBounds);
+      this.animateBounds(window, target, SHELF_NOTE_TRANSITION_MS, () => {
+        if (!window.isDestroyed()) window.hide();
+        this.finishNoteTransition(session.id, window);
+        if (this.activeDockedId === session.id) this.activeDockedId = null;
+        this.scheduleHideGroup();
+      });
+      log.info("侧边架便签已拖回收纳区域", { id: session.id });
+      return true;
+    }
     if (detach && session.revealing) {
       session.releasePending = true;
       return true;
