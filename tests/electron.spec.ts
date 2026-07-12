@@ -53,9 +53,10 @@ test("主窗口和便签窗口关键流程", async () => {
         "toggle-color-picker",
         "toggle-metadata",
         "focus-search",
-        "toggle-sync",
+        "open-settings",
+        "sync-now",
       ];
-      return Object.fromEntries(ids.map((id) => [id, menu?.getMenuItemById(id)?.accelerator]));
+      return Object.fromEntries(ids.map((id) => [id, menu?.getMenuItemById(id)?.accelerator ?? null]));
     });
     expect(accelerators).toEqual({
       "open-main-window": "CommandOrControl+0",
@@ -69,10 +70,73 @@ test("主窗口和便签窗口关键流程", async () => {
       "toggle-color-picker": "CommandOrControl+Shift+C",
       "toggle-metadata": "CommandOrControl+Shift+T",
       "focus-search": process.platform === "darwin" ? "Command+F" : "Control+Shift+F",
-      "toggle-sync": "CommandOrControl+,",
+      "open-settings": "CommandOrControl+,",
+      "sync-now": null,
     });
     await triggerShortcut(mainWindow, "focus-search");
     await expect(mainWindow.locator(".main-search input")).toBeFocused();
+
+    await mainWindow.getByRole("button", { name: "打开设置" }).click();
+    const settingsCenter = mainWindow.locator(".settings-center");
+    await expect(settingsCenter).toBeVisible();
+    await expect(settingsCenter.getByRole("heading", { name: "通用" })).toBeVisible();
+    const defaultPinned = settingsCenter.getByRole("checkbox", { name: "默认置顶" });
+    await expect(defaultPinned).not.toBeChecked();
+    await defaultPinned.check();
+    await expect.poll(() => mainWindow.evaluate(async () => (await window.noteAPI.getAppSettings()).general.defaultNotePinned)).toBe(true);
+    await defaultPinned.uncheck();
+    await expect.poll(() => mainWindow.evaluate(async () => (await window.noteAPI.getAppSettings()).general.defaultNotePinned)).toBe(false);
+
+    await settingsCenter.getByRole("button", { name: "快捷键" }).click();
+    const syncShortcutRow = settingsCenter.locator(".shortcut-row").filter({ hasText: "立即同步" });
+    const syncRecorder = syncShortcutRow.getByRole("button", { name: "立即同步快捷键", exact: true });
+    await syncRecorder.click();
+    await syncRecorder.press("Control+Alt+Y");
+    await expect(syncRecorder).toContainText("Ctrl+Alt+Y");
+    await expect.poll(() => app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("sync-now")?.accelerator)).toBe("Control+Alt+Y");
+
+    const globalToggle = syncShortcutRow.getByRole("checkbox", { name: "全局" });
+    await globalToggle.check();
+    await expect.poll(() => app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered("Control+Alt+Y"))).toBe(true);
+    await expect.poll(() => app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("sync-now")?.accelerator ?? null)).toBeNull();
+    await globalToggle.uncheck();
+    await expect.poll(() => app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered("Control+Alt+Y"))).toBe(false);
+
+    await syncRecorder.click();
+    await syncRecorder.press(process.platform === "darwin" ? "Meta+N" : "Control+Shift+N");
+    await expect(syncShortcutRow.getByRole("alert")).toContainText("快捷键已用于新建便签");
+    await syncShortcutRow.getByRole("button", { name: "恢复立即同步默认键位" }).click();
+    await expect(syncRecorder).toHaveText("未设置");
+
+    const settingsFit = await mainWindow.evaluate(() => ({
+      width: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      height: window.innerHeight,
+      scrollHeight: document.documentElement.scrollHeight,
+    }));
+    expect(settingsFit.scrollWidth).toBeLessThanOrEqual(settingsFit.width);
+    expect(settingsFit.scrollHeight).toBeLessThanOrEqual(settingsFit.height);
+    await app.evaluate(({ BrowserWindow }, url) => {
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.setSize(480, 360);
+    }, mainWindow.url());
+    await expect(settingsCenter.locator(".settings-nav")).toHaveCSS("flex-direction", "row");
+    const compactSettingsFit = await mainWindow.evaluate(() => ({
+      width: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      height: window.innerHeight,
+      scrollHeight: document.documentElement.scrollHeight,
+    }));
+    expect(compactSettingsFit.scrollWidth).toBeLessThanOrEqual(compactSettingsFit.width);
+    expect(compactSettingsFit.scrollHeight).toBeLessThanOrEqual(compactSettingsFit.height);
+    await mainWindow.screenshot({ path: "/private/tmp/pinote-settings-compact.png" });
+    await app.evaluate(({ BrowserWindow }, url) => {
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.setSize(640, 500);
+    }, mainWindow.url());
+    await settingsCenter.getByRole("button", { name: "云同步" }).click();
+    await expect(settingsCenter.getByRole("heading", { name: "云同步" })).toBeVisible();
+    await mainWindow.screenshot({ path: "/private/tmp/pinote-settings-sync.png" });
+    await mainWindow.getByRole("button", { name: "返回便签" }).click();
+    await expect(mainWindow.locator(".main-search input")).toBeVisible();
     const trayTemplatePath = path.resolve("electron/assets/trayTemplate.png");
     const trayRetinaTemplatePath = path.resolve("electron/assets/trayTemplate@2x.png");
     const trayIconState = await app.evaluate(({ nativeImage }, input) => {

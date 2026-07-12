@@ -5,6 +5,7 @@ import MainApp from "./MainApp";
 import ShelfApp from "./ShelfApp";
 import "./styles.css";
 import "./main-window.css";
+import "./settings.css";
 
 const view = new URLSearchParams(window.location.search).get("view");
 

@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
+import { defaultShortcutBindings, normalizeShortcutBindings } from "./shortcut-settings.mjs";
 
-const CURRENT_VERSION = 7;
+const CURRENT_VERSION = 8;
 const DEFAULT_COLOR = "lemon";
+const NOTE_COLORS = new Set(["lemon", "mint", "coral", "sky", "paper"]);
 const DEFAULT_SHELF_PLACEMENT = Object.freeze({ x: 1, y: 0.5, edge: "right" });
 const MAX_GROUP_NAME_LENGTH = 80;
 const MAX_TAG_COUNT = 16;
@@ -12,21 +14,22 @@ const MAX_TAG_LENGTH = 40;
 const DOCK_STATES = new Set(["free", "shelf", "inline"]);
 
 export class NoteStore {
-  constructor(userDataPath) {
+  constructor(userDataPath, platform = process.platform) {
     this.filePath = path.join(userDataPath, "notes.json");
     this.tempPath = path.join(userDataPath, "notes.json.tmp");
-    this.state = createEmptyState();
+    this.platform = platform;
+    this.state = createEmptyState(platform);
     this.writeQueue = Promise.resolve();
   }
 
   async load() {
     try {
       const raw = await readFile(this.filePath, "utf8");
-      this.state = normalizeState(JSON.parse(raw));
+      this.state = normalizeState(JSON.parse(raw), this.platform);
       log.info("便签数据已加载", { notes: this.state.notes.length, version: this.state.version });
     } catch (error) {
       if (error?.code !== "ENOENT") log.error("读取便签数据失败", error);
-      this.state = createEmptyState();
+      this.state = createEmptyState(this.platform);
     }
 
     await this.save();
@@ -98,7 +101,7 @@ export class NoteStore {
       id: randomUUID(),
       title: "新便签",
       markdown: "",
-      color: DEFAULT_COLOR,
+      color: this.state.preferences.defaultNoteColor,
       groupName: "",
       tags: [],
       revision: 0,
@@ -109,6 +112,7 @@ export class NoteStore {
     this.state.notes.push(note);
     this.state.windows[note.id] = createWindowState({
       open: true,
+      pinned: this.state.preferences.defaultNotePinned,
       bounds: Number.isFinite(position.x) && Number.isFinite(position.y)
         ? { x: position.x, y: position.y, width: 253, height: 220 }
         : undefined,
@@ -198,6 +202,21 @@ export class NoteStore {
   setSyncSettings(url, encryptedToken) {
     this.state.sync = { url, encryptedToken };
     void this.save();
+  }
+
+  getPreferences() {
+    return structuredClone(this.state.preferences);
+  }
+
+  updatePreferences(patch) {
+    const current = this.state.preferences;
+    this.state.preferences = normalizePreferences({
+      ...current,
+      ...patch,
+      shortcuts: patch?.shortcuts ?? current.shortcuts,
+    }, this.platform);
+    void this.save();
+    return this.getPreferences();
   }
 
   buildSyncRequest() {
@@ -300,7 +319,7 @@ export class NoteStore {
 
 }
 
-function createEmptyState() {
+function createEmptyState(platform = process.platform) {
   return {
     version: CURRENT_VERSION,
     deviceId: randomUUID(),
@@ -309,11 +328,12 @@ function createEmptyState() {
     deleted: [],
     shelf: { displayId: null, placements: {} },
     sync: { url: "", encryptedToken: "" },
+    preferences: normalizePreferences({}, platform),
   };
 }
 
-function normalizeState(value) {
-  const empty = createEmptyState();
+function normalizeState(value, platform = process.platform) {
+  const empty = createEmptyState(platform);
   const deviceId = typeof value?.deviceId === "string" ? value.deviceId : empty.deviceId;
   const notes = Array.isArray(value?.notes)
     ? value.notes.map((note) => normalizeContentNote({ ...note, markdown: note.markdown ?? note.content }, deviceId))
@@ -346,6 +366,17 @@ function normalizeState(value) {
       url: typeof value?.sync?.url === "string" ? value.sync.url : "",
       encryptedToken: typeof value?.sync?.encryptedToken === "string" ? value.sync.encryptedToken : "",
     },
+    preferences: normalizePreferences(value?.preferences, platform),
+  };
+}
+
+function normalizePreferences(value, platform) {
+  return {
+    showMainOnLogin: value?.showMainOnLogin !== false,
+    closeMainToTray: value?.closeMainToTray !== false,
+    defaultNoteColor: NOTE_COLORS.has(value?.defaultNoteColor) ? value.defaultNoteColor : DEFAULT_COLOR,
+    defaultNotePinned: Boolean(value?.defaultNotePinned),
+    shortcuts: normalizeShortcutBindings(value?.shortcuts ?? defaultShortcutBindings(platform), platform),
   };
 }
 

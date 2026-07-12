@@ -61,14 +61,60 @@ export interface PlatformCapabilities {
 export type AppCommand =
   | "close-window"
   | "focus-search"
+  | "open-settings"
   | "focus-title"
   | "focus-editor"
   | "toggle-collapse"
   | "toggle-pin"
   | "toggle-dock"
   | "toggle-color-picker"
-  | "toggle-metadata"
-  | "toggle-sync";
+  | "toggle-metadata";
+
+export type ShortcutCommandId =
+  | "open-main-window"
+  | "new-note"
+  | "focus-search"
+  | "open-settings"
+  | "sync-now"
+  | "close-window"
+  | "focus-title"
+  | "focus-editor"
+  | "toggle-collapse"
+  | "toggle-pin"
+  | "toggle-dock"
+  | "toggle-color-picker"
+  | "toggle-metadata";
+
+export interface GeneralSettings {
+  launchAtLogin: boolean;
+  launchAtLoginSupported: boolean;
+  showMainOnLogin: boolean;
+  closeMainToTray: boolean;
+  defaultNoteColor: string;
+  defaultNotePinned: boolean;
+}
+
+export interface ShortcutSetting {
+  id: ShortcutCommandId;
+  label: string;
+  group: "main" | "window" | "note";
+  globalEligible: boolean;
+  accelerator: string | null;
+  global: boolean;
+}
+
+export interface AppSettings {
+  general: GeneralSettings;
+  shortcuts: ShortcutSetting[];
+}
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  electronVersion: string;
+  platform: string;
+  arch: string;
+}
 
 export interface NoteAPI {
   getNote: (id: string) => Promise<{ note: Note | null; group: GroupState; capabilities: PlatformCapabilities }>;
@@ -110,12 +156,22 @@ export interface NoteAPI {
   getSyncStatus: () => Promise<SyncStatus>;
   configureSync: (settings: { url: string; token: string }) => Promise<SyncSettings>;
   syncNow: () => Promise<SyncStatus>;
+  getAppSettings: () => Promise<AppSettings>;
+  updateGeneralSettings: (patch: Partial<Omit<GeneralSettings, "launchAtLoginSupported">>) => Promise<AppSettings>;
+  updateShortcut: (
+    id: ShortcutCommandId,
+    patch: { accelerator?: string | null; global?: boolean },
+  ) => Promise<AppSettings>;
+  resetShortcut: (id: ShortcutCommandId) => Promise<AppSettings>;
+  resetShortcuts: () => Promise<AppSettings>;
+  getAppInfo: () => Promise<AppInfo>;
   onCollapsed: (callback: (collapsed: boolean) => void) => () => void;
   onGroupState: (callback: (state: GroupState) => void) => () => void;
   onCommand: (callback: (command: AppCommand) => void) => () => void;
   onRemoteNote: (callback: (note: Note) => void) => () => void;
   onFlushRequested: (callback: () => Promise<void>) => () => void;
   onSyncStatus: (callback: (status: SyncStatus) => void) => () => void;
+  onAppSettings: (callback: (settings: AppSettings) => void) => () => void;
   onNoteList: (callback: (notes: NoteSummary[]) => void) => () => void;
   onShelfExpanded: (callback: (expanded: boolean) => void) => () => void;
   onShelfPlacement: (callback: (edge: ShelfPlacementEdge) => void) => () => void;

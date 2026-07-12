@@ -265,7 +265,6 @@ export default function App() {
         case "toggle-dock": toggleDock(); break;
         case "toggle-color-picker": toggleColorPicker(); break;
         case "toggle-metadata": toggleMetadata(); break;
-        case "toggle-sync": toggleSync(); break;
       }
     });
     const offRemote = window.noteAPI.onRemoteNote((remote) => {

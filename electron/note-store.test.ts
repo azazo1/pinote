@@ -121,7 +121,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(7);
+    expect(restored.state.version).toBe(8);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -177,7 +177,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(7);
+    expect(restored.state.version).toBe(8);
     expect(restored.getShelfPlacement(101)).toEqual({ x: 1, y: 0.32, edge: "right" });
     expect(restored.state.shelf).not.toHaveProperty("positions");
   });
@@ -413,7 +413,43 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(7);
+    expect(restored.state.version).toBe(8);
     expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [] });
+  });
+
+  it("migrates version 7 data with default preferences", async () => {
+    const dataPath = testStorePath();
+    const legacy = new NoteStore(dataPath, "linux");
+    await legacy.load();
+    legacy.state.version = 7;
+    delete legacy.state.preferences;
+    await legacy.save();
+
+    const restored = new NoteStore(dataPath, "linux");
+    await restored.load();
+
+    expect(restored.state.version).toBe(8);
+    expect(restored.getPreferences()).toMatchObject({
+      showMainOnLogin: true,
+      closeMainToTray: true,
+      defaultNoteColor: "lemon",
+      defaultNotePinned: false,
+    });
+    expect(restored.getPreferences().shortcuts["new-note"]).toEqual({
+      accelerator: "Control+Shift+N",
+      global: false,
+    });
+  });
+
+  it("uses normalized preferences for every new note", async () => {
+    const store = testStore();
+    await store.load();
+    store.updatePreferences({ defaultNoteColor: "mint", defaultNotePinned: true });
+
+    const note = store.createNote();
+
+    expect(note).toMatchObject({ color: "mint", pinned: true });
+    store.updatePreferences({ defaultNoteColor: "purple" });
+    expect(store.getPreferences().defaultNoteColor).toBe("lemon");
   });
 });

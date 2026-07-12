@@ -1,7 +1,7 @@
-import { Cloud, Folder, Hash, Plus, Power, Search, StickyNote, X } from "lucide-react";
+import { ArrowLeft, Cloud, Folder, Hash, Plus, Power, Search, Settings, StickyNote, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MainNoteList } from "./components/MainNoteList";
-import { SyncPanel } from "./components/SyncPanel";
+import { SettingsCenter, type SettingsSection } from "./components/settings/SettingsCenter";
 import type { NoteSummary, SyncStatus } from "./types";
 
 const noteAPI = window.noteAPI;
@@ -11,7 +11,8 @@ export default function MainApp() {
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [tagFilters, setTagFilters] = useState<string[]>([]);
-  const [syncOpen, setSyncOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"notes" | "settings">("notes");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
   const [creating, setCreating] = useState(false);
   const [quitting, setQuitting] = useState(false);
@@ -32,10 +33,14 @@ export default function MainApp() {
 
   useEffect(() => noteAPI.onCommand((command) => {
     if (command === "focus-search") {
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    } else if (command === "toggle-sync") {
-      setSyncOpen((open) => !open);
+      setActiveView("notes");
+      window.requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      });
+    } else if (command === "open-settings") {
+      setSettingsSection("general");
+      setActiveView("settings");
     }
   }), []);
 
@@ -171,8 +176,13 @@ export default function MainApp() {
     setTagFilters([]);
   }
 
+  function openSettings(section: SettingsSection) {
+    setSettingsSection(section);
+    setActiveView("settings");
+  }
+
   return (
-    <main className="main-shell">
+    <main className={`main-shell${activeView === "settings" ? " is-settings" : ""}`}>
       <header className="main-header">
         <div className="main-brand">
           <span className="main-brand-mark" aria-hidden="true"><StickyNote size={18} /></span>
@@ -193,12 +203,22 @@ export default function MainApp() {
           <button
             className={`main-icon-button sync-${syncStatus.state}`}
             type="button"
-            aria-label="同步设置"
+            aria-label="云同步设置"
             title={syncStatus.message}
-            onClick={() => setSyncOpen((open) => !open)}
+            onClick={() => openSettings("sync")}
           >
             <Cloud size={17} />
             <span className="main-sync-dot" aria-hidden="true" />
+          </button>
+          <button
+            className={`main-icon-button${activeView === "settings" ? " is-active" : ""}`}
+            type="button"
+            aria-label={activeView === "settings" ? "返回便签" : "打开设置"}
+            title={activeView === "settings" ? "返回便签" : "设置"}
+            aria-pressed={activeView === "settings"}
+            onClick={() => activeView === "settings" ? setActiveView("notes") : openSettings("general")}
+          >
+            {activeView === "settings" ? <ArrowLeft size={17} /> : <Settings size={17} />}
           </button>
           <button className="main-create-button" type="button" disabled={creating} onClick={() => void createNote()}>
             <Plus size={16} />
@@ -207,6 +227,7 @@ export default function MainApp() {
         </div>
       </header>
 
+      {activeView === "notes" ? <>
       <section className="main-toolbar" aria-label="便签工具栏">
         <div className="main-toolbar-primary">
           <label className="main-search">
@@ -289,8 +310,6 @@ export default function MainApp() {
         )}
       </section>
 
-      {syncOpen && <SyncPanel status={syncStatus} onClose={() => setSyncOpen(false)} onStatus={setSyncStatus} />}
-
       {actionError && <div className="main-action-error" role="alert">{actionError}</div>}
 
       <section className="main-content" aria-label="全部便签">
@@ -313,6 +332,14 @@ export default function MainApp() {
           </div>
         )}
       </section>
+      </> : (
+        <SettingsCenter
+          section={settingsSection}
+          status={syncStatus}
+          onSection={setSettingsSection}
+          onStatus={setSyncStatus}
+        />
+      )}
     </main>
   );
 }

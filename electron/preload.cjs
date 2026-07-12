@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld("noteAPI", {
   getSyncStatus: () => ipcRenderer.invoke("sync:get-status"),
   configureSync: (settings) => ipcRenderer.invoke("sync:configure", settings),
   syncNow: () => ipcRenderer.invoke("sync:now"),
+  getAppSettings: () => ipcRenderer.invoke("settings:get"),
+  updateGeneralSettings: (patch) => ipcRenderer.invoke("settings:update-general", patch),
+  updateShortcut: (id, patch) => ipcRenderer.invoke("settings:update-shortcut", id, patch),
+  resetShortcut: (id) => ipcRenderer.invoke("settings:reset-shortcut", id),
+  resetShortcuts: () => ipcRenderer.invoke("settings:reset-shortcuts"),
+  getAppInfo: () => ipcRenderer.invoke("app:get-info"),
   onCollapsed: (callback) => {
     const listener = (_event, collapsed) => callback(collapsed);
     ipcRenderer.on("note:collapsed", listener);
@@ -77,6 +83,11 @@ contextBridge.exposeInMainWorld("noteAPI", {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("sync:status", listener);
     return () => ipcRenderer.removeListener("sync:status", listener);
+  },
+  onAppSettings: (callback) => {
+    const listener = (_event, settings) => callback(settings);
+    ipcRenderer.on("settings:changed", listener);
+    return () => ipcRenderer.removeListener("settings:changed", listener);
   },
   onNoteList: (callback) => {
     const listener = (_event, notes) => callback(notes);

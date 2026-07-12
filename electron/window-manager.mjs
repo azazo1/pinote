@@ -26,8 +26,9 @@ const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
 
 export class WindowManager {
-  constructor(store) {
+  constructor(store, { requestQuit } = {}) {
     this.store = store;
+    this.requestQuit = requestQuit;
     this.windows = new Map();
     this.mainWindow = null;
     this.shelfWindow = null;
@@ -155,6 +156,11 @@ export class WindowManager {
     });
     window.on("close", (event) => {
       if (this.quitting || !this.trayAvailable) return;
+      if (!this.store.state.preferences.closeMainToTray) {
+        event.preventDefault();
+        this.requestQuit?.(window);
+        return;
+      }
       event.preventDefault();
       this.ignoreMainActivationUntil = Date.now() + 350;
       window.hide();

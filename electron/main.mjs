@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { NoteStore } from "./note-store.mjs";
+import { ShortcutManager } from "./shortcut-manager.mjs";
+import { SHORTCUT_COMMANDS } from "./shortcut-settings.mjs";
 import { createTrayIcon } from "./tray-icon.mjs";
 import { WindowManager } from "./window-manager.mjs";
 import { SyncService } from "./sync-service.mjs";
@@ -13,10 +15,23 @@ log.transports.console.level = process.env.VITE_DEV_SERVER_URL ? "debug" : "info
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const RESIZE_EDGES = new Set(["n", "s", "e", "w", "nw", "sw", "se"]);
+const LOGIN_HIDDEN_ARGUMENT = "--pinote-login-hidden";
+const NOTE_COMMANDS = new Set([
+  "focus-title",
+  "focus-editor",
+  "toggle-collapse",
+  "toggle-pin",
+  "toggle-dock",
+  "toggle-color-picker",
+  "toggle-metadata",
+]);
+
+if (process.platform === "linux") app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 
 let store;
 let windows;
 let sync;
+let shortcutManager;
 let tray = null;
 let quitStarted = false;
 let quitReady = false;
@@ -32,17 +47,25 @@ app.whenReady().then(async () => {
   log.info("Pinote 正在启动", { platform: process.platform, electron: process.versions.electron });
   store = new NoteStore(app.getPath("userData"));
   await store.load();
-  windows = new WindowManager(store);
+  windows = new WindowManager(store, { requestQuit: (owner) => void confirmAndQuit(owner) });
   sync = new SyncService(store, windows);
   registerIpc();
-  installMenu();
   installTray();
-  windows.openMainWindow();
+  sync.initialize();
+  shortcutManager = new ShortcutManager({
+    platform: process.platform,
+    getBindings: () => store.getPreferences().shortcuts,
+    saveBindings: (shortcuts) => store.updatePreferences({ shortcuts }),
+    execute: (id) => executeShortcut(id, BrowserWindow.getFocusedWindow()),
+    installMenu,
+    broadcast: broadcastSettings,
+  });
+  shortcutManager.initialize();
+  if (!process.argv.includes(LOGIN_HIDDEN_ARGUMENT)) windows.openMainWindow();
   for (const note of store.state.notes) {
     if (store.getWindowState(note.id).open) windows.open(note);
   }
   windows.restoreDockedMode();
-  sync.initialize();
 
   app.on("activate", () => {
     if (quitStarted || !windows.shouldOpenMainWindowOnActivate()) return;
@@ -91,6 +114,7 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  shortcutManager?.dispose();
   tray?.destroy();
   tray = null;
 });
@@ -134,35 +158,7 @@ function registerIpc() {
     sync.schedule();
   });
   ipcMain.handle("window:open-main", () => windows.openMainWindow() !== null);
-  ipcMain.handle("app:request-quit", async (event) => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    if (
-      quitStarted ||
-      quitConfirmationOpen ||
-      !owner ||
-      owner.isDestroyed() ||
-      owner !== windows.mainWindow
-    ) return false;
-
-    quitConfirmationOpen = true;
-    try {
-      const result = await dialog.showMessageBox(owner, {
-        type: "warning",
-        buttons: ["取消", "退出 Pinote"],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        message: "退出 Pinote?",
-        detail: "所有便签窗口将关闭, 后台同步也会停止.",
-      });
-      if (result.response !== 1) return false;
-      log.info("用户从主窗口确认退出应用");
-      app.quit();
-      return true;
-    } finally {
-      quitConfirmationOpen = false;
-    }
-  });
+  ipcMain.handle("app:request-quit", (event) => confirmAndQuit(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle("window:toggle-collapse", (_event, id) => windows.toggleCollapse(validId(id)));
   ipcMain.on("window:move-start", (event, id) => windows.beginMove(validId(id), event.sender));
   ipcMain.on("window:move", (event, id, x, y, pointerX, pointerY) => {
@@ -207,21 +203,38 @@ function registerIpc() {
   ipcMain.handle("sync:get-status", () => sync.getStatus());
   ipcMain.handle("sync:configure", (_event, settings) => sync.configure(settings));
   ipcMain.handle("sync:now", () => sync.syncNow());
+  ipcMain.handle("settings:get", () => getAppSettings());
+  ipcMain.handle("settings:update-general", (_event, patch) => updateGeneralSettings(patch));
+  ipcMain.handle("settings:update-shortcut", (_event, id, patch) => {
+    shortcutManager.update(id, patch);
+    return getAppSettings();
+  });
+  ipcMain.handle("settings:reset-shortcut", (_event, id) => {
+    shortcutManager.reset(id);
+    return getAppSettings();
+  });
+  ipcMain.handle("settings:reset-shortcuts", () => {
+    shortcutManager.resetAll();
+    return getAppSettings();
+  });
+  ipcMain.handle("app:get-info", () => ({
+    name: app.getName(),
+    version: app.getVersion(),
+    electronVersion: process.versions.electron,
+    platform: process.platform,
+    arch: process.arch,
+  }));
 }
 
-function installMenu() {
-  const newNoteAccelerator = process.platform === "darwin" ? "Command+N" : "Control+Shift+N";
-  const focusSearchAccelerator = process.platform === "darwin" ? "Command+F" : "Control+Shift+F";
-  const sendCommand = (command) => (_menuItem, focusedWindow) => {
-    focusedWindow?.webContents.send("app:command", command);
-  };
-  const closeFocusedWindow = (_menuItem, focusedWindow) => {
-    if (!focusedWindow || focusedWindow === windows.shelfWindow) return;
-    if (focusedWindow === windows.mainWindow) {
-      focusedWindow.close();
-      return;
-    }
-    focusedWindow.webContents.send("app:command", "close-window");
+function installMenu(bindings) {
+  const item = (id, label = SHORTCUT_COMMANDS.find((command) => command.id === id)?.label) => {
+    const binding = bindings[id];
+    return {
+      id,
+      label,
+      ...(binding?.accelerator && !binding.global ? { accelerator: binding.accelerator } : {}),
+      click: (_menuItem, focusedWindow) => executeShortcut(id, focusedWindow),
+    };
   };
   const template = [
     {
@@ -229,7 +242,7 @@ function installMenu() {
       submenu: [
         { label: "关于 Pinote", role: "about" },
         { type: "separator" },
-        { id: "open-main-window", label: "打开主窗口", accelerator: "CommandOrControl+0", click: () => windows.openMainWindow() },
+        item("open-main-window"),
         { type: "separator" },
         { label: "隐藏 Pinote", role: "hide" },
         { label: "退出 Pinote", role: "quit" },
@@ -238,29 +251,162 @@ function installMenu() {
     {
       label: "便签",
       submenu: [
-        { id: "new-note", label: "新建便签", accelerator: newNoteAccelerator, click: () => windows.createNearFocused() },
-        { id: "close-window", label: "关闭当前窗口", accelerator: "CommandOrControl+W", click: closeFocusedWindow },
+        item("new-note"),
+        item("close-window"),
         { type: "separator" },
-        { id: "focus-title", label: "聚焦标题", accelerator: "CommandOrControl+1", click: sendCommand("focus-title") },
-        { id: "focus-editor", label: "聚焦正文", accelerator: "CommandOrControl+2", click: sendCommand("focus-editor") },
-        { id: "toggle-collapse", label: "收起或展开", accelerator: "CommandOrControl+M", click: sendCommand("toggle-collapse") },
+        item("focus-title"),
+        item("focus-editor"),
+        item("toggle-collapse"),
         { type: "separator" },
-        { id: "toggle-pin", label: "置顶或取消置顶", accelerator: "CommandOrControl+Shift+P", click: sendCommand("toggle-pin") },
-        { id: "toggle-dock", label: "切换当前便签的侧边收纳", accelerator: "CommandOrControl+Shift+D", click: sendCommand("toggle-dock") },
-        { id: "toggle-color-picker", label: "便签颜色", accelerator: "CommandOrControl+Shift+C", click: sendCommand("toggle-color-picker") },
-        { id: "toggle-metadata", label: "分组与标签", accelerator: "CommandOrControl+Shift+T", click: sendCommand("toggle-metadata") },
+        item("toggle-pin"),
+        item("toggle-dock", "切换当前便签的侧边收纳"),
+        item("toggle-color-picker"),
+        item("toggle-metadata"),
       ],
     },
     {
       label: "视图",
       submenu: [
-        { id: "focus-search", label: "搜索便签", accelerator: focusSearchAccelerator, click: sendCommand("focus-search") },
-        { id: "toggle-sync", label: "同步设置", accelerator: "CommandOrControl+,", click: sendCommand("toggle-sync") },
+        item("focus-search"),
+        item("open-settings"),
+        item("sync-now"),
       ],
     },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function executeShortcut(id, focusedWindow) {
+  if (quitStarted) return;
+  if (id === "open-main-window") {
+    windows.openMainWindow();
+    return;
+  }
+  if (id === "new-note") {
+    windows.createNearFocused();
+    sync.schedule();
+    return;
+  }
+  if (id === "focus-search") {
+    sendMainCommand("focus-search");
+    return;
+  }
+  if (id === "open-settings") {
+    sendMainCommand("open-settings");
+    return;
+  }
+  if (id === "sync-now") {
+    void sync.syncNow().catch(() => {});
+    return;
+  }
+  if (id === "close-window") {
+    if (!focusedWindow || focusedWindow === windows.shelfWindow) return;
+    if (focusedWindow === windows.mainWindow) focusedWindow.close();
+    else focusedWindow.webContents.send("app:command", "close-window");
+    return;
+  }
+  if (!NOTE_COMMANDS.has(id) || !focusedWindow || focusedWindow === windows.mainWindow || focusedWindow === windows.shelfWindow) return;
+  focusedWindow.webContents.send("app:command", id);
+}
+
+function sendMainCommand(command) {
+  const window = windows.openMainWindow();
+  const send = () => {
+    if (!window.isDestroyed()) window.webContents.send("app:command", command);
+  };
+  if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", send);
+  else send();
+}
+
+async function confirmAndQuit(owner) {
+  if (
+    quitStarted ||
+    quitConfirmationOpen ||
+    !owner ||
+    owner.isDestroyed() ||
+    owner !== windows.mainWindow
+  ) return false;
+
+  quitConfirmationOpen = true;
+  try {
+    const result = await dialog.showMessageBox(owner, {
+      type: "warning",
+      buttons: ["取消", "退出 Pinote"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      message: "退出 Pinote?",
+      detail: "所有便签窗口将关闭, 后台同步也会停止.",
+    });
+    if (result.response !== 1) return false;
+    log.info("用户从主窗口确认退出应用");
+    app.quit();
+    return true;
+  } finally {
+    quitConfirmationOpen = false;
+  }
+}
+
+function getAppSettings() {
+  const preferences = store.getPreferences();
+  const loginSupported = process.platform === "darwin" || process.platform === "win32";
+  let launchAtLogin = false;
+  if (loginSupported) {
+    try {
+      launchAtLogin = app.getLoginItemSettings().openAtLogin;
+    } catch (error) {
+      log.warn("读取登录启动状态失败", { message: error instanceof Error ? error.message : "未知错误" });
+    }
+  }
+  return {
+    general: {
+      launchAtLogin,
+      launchAtLoginSupported: loginSupported,
+      showMainOnLogin: preferences.showMainOnLogin,
+      closeMainToTray: preferences.closeMainToTray,
+      defaultNoteColor: preferences.defaultNoteColor,
+      defaultNotePinned: preferences.defaultNotePinned,
+    },
+    shortcuts: SHORTCUT_COMMANDS.map((command) => ({
+      ...command,
+      ...preferences.shortcuts[command.id],
+    })),
+  };
+}
+
+function updateGeneralSettings(patch) {
+  if (!patch || typeof patch !== "object") throw new Error("设置内容无效");
+  const current = store.getPreferences();
+  const preferencesPatch = {};
+  for (const key of ["showMainOnLogin", "closeMainToTray", "defaultNotePinned"]) {
+    if (typeof patch[key] === "boolean") preferencesPatch[key] = patch[key];
+  }
+  if (typeof patch.defaultNoteColor === "string") preferencesPatch.defaultNoteColor = patch.defaultNoteColor;
+  const nextShowMainOnLogin = preferencesPatch.showMainOnLogin ?? current.showMainOnLogin;
+  const loginSupported = process.platform === "darwin" || process.platform === "win32";
+  if (Object.hasOwn(patch, "launchAtLogin")) {
+    if (!loginSupported) throw new Error("当前系统不支持登录时启动");
+    setLoginItem(Boolean(patch.launchAtLogin), nextShowMainOnLogin);
+  } else if (preferencesPatch.showMainOnLogin !== undefined && loginSupported) {
+    const openAtLogin = app.getLoginItemSettings().openAtLogin;
+    if (openAtLogin) setLoginItem(true, nextShowMainOnLogin);
+  }
+  if (Object.keys(preferencesPatch).length > 0) store.updatePreferences(preferencesPatch);
+  log.info("通用设置已更新", { keys: Object.keys(patch) });
+  broadcastSettings();
+  return getAppSettings();
+}
+
+function setLoginItem(openAtLogin, showMainOnLogin) {
+  app.setLoginItemSettings({
+    openAtLogin,
+    args: openAtLogin && !showMainOnLogin ? [LOGIN_HIDDEN_ARGUMENT] : [],
+  });
+}
+
+function broadcastSettings() {
+  windows.broadcast("settings:changed", getAppSettings());
 }
 
 function installTray() {
