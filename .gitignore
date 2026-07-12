@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+build/generated/
+target/
+*.log
+.DS_Store
+coverage/
+test-results/
+data/
+secrets/

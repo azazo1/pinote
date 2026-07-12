@@ -1,0 +1,36 @@
+services:
+  sync-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: pinote-sync-server:local
+    restart: unless-stopped
+    ports:
+      - "${PINOTE_PORT:-8787}:8787"
+    environment:
+      PINOTE_HOST: 0.0.0.0
+      PINOTE_PORT: 8787
+      PINOTE_DATA_DIR: ${PINOTE_DATA_DIR:-/data}
+    volumes:
+      - pinote-data:${PINOTE_DATA_DIR:-/data}
+    secrets:
+      - pinote_token
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/readyz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pinote-data:
+
+secrets:
+  pinote_token:
+    file: ${PINOTE_TOKEN_FILE:-./secrets/pinote-token}

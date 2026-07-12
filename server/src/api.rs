@@ -1,0 +1,160 @@
+use std::time::{Duration, Instant};
+
+use axum::{
+    Json, Router,
+    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
+    http::StatusCode,
+    middleware,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde_json::json;
+use tracing::{error, info, warn};
+
+use crate::{
+    auth::{AuthToken, require_auth},
+    model::{SyncRequest, SyncResponse},
+    store::Store,
+};
+
+const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[derive(Clone)]
+struct AppState {
+    store: Store,
+}
+
+pub fn build_router(store: Store, token: &str) -> Router {
+    let protected = Router::new()
+        .route("/v1/sync", post(sync))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .route_layer(middleware::from_fn_with_state(
+            AuthToken::new(token),
+            require_auth,
+        ));
+
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready))
+        .merge(protected)
+        .fallback(not_found)
+        .with_state(AppState { store })
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({ "ok": true }))
+}
+
+async fn ready(State(state): State<AppState>) -> Response {
+    match state.store.is_ready().await {
+        Ok(()) => Json(json!({ "ready": true })).into_response(),
+        Err(cause) => {
+            error!(error = %cause, "同步数据库未就绪");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "ready": false, "error": "同步数据库未就绪" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn sync(
+    State(state): State<AppState>,
+    payload: Result<Json<SyncRequest>, JsonRejection>,
+) -> Result<Json<SyncResponse>, ApiError> {
+    let Json(request) = payload.map_err(|cause| ApiError::bad_request(cause.body_text()))?;
+    request.validate().map_err(ApiError::unprocessable)?;
+
+    let started_at = Instant::now();
+    let device_id = request.device_id.clone();
+    let change_count = request.changes.len();
+    let deletion_count = request.deletions.len();
+    let result = tokio::time::timeout(TRANSACTION_TIMEOUT, state.store.sync(request)).await;
+    match result {
+        Ok(Ok(response)) => {
+            info!(
+                device_id,
+                change_count,
+                deletion_count,
+                note_count = response.notes.len(),
+                deleted_count = response.deleted.len(),
+                conflict_count = response.conflicts.len(),
+                duration_ms = started_at.elapsed().as_millis(),
+                "同步请求完成"
+            );
+            Ok(Json(response))
+        }
+        Ok(Err(cause)) => {
+            error!(
+                device_id,
+                change_count,
+                deletion_count,
+                duration_ms = started_at.elapsed().as_millis(),
+                error = %cause,
+                "同步事务失败"
+            );
+            Err(ApiError::internal())
+        }
+        Err(_) => {
+            warn!(
+                device_id,
+                change_count,
+                deletion_count,
+                duration_ms = started_at.elapsed().as_millis(),
+                "同步事务超时"
+            );
+            Err(ApiError::timeout())
+        }
+    }
+}
+
+async fn not_found() -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "未找到接口".to_owned(),
+    }
+}
+
+struct ApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ApiError {
+    fn bad_request(message: String) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message,
+        }
+    }
+
+    fn unprocessable(message: String) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message,
+        }
+    }
+
+    fn timeout() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "同步事务超时".to_owned(),
+        }
+    }
+
+    fn internal() -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "同步事务失败".to_owned(),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.message }))).into_response()
+    }
+}
+

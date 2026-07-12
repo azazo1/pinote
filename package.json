@@ -1,0 +1,123 @@
+{
+  "name": "pinote",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A focused desktop sticky note app with Markdown and Emacs key bindings",
+  "author": "Pinote contributors",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "tsc --noEmit && vite build --base=./",
+    "icons": "bun scripts/generate-icons.mjs",
+    "pack": "bun run build && bun run icons && electron-builder --dir",
+    "dist": "bun run build && bun run icons && electron-builder",
+    "dist:mac": "bun run build && bun run icons && electron-builder --mac dmg --x64 --arm64",
+    "dist:win": "bun run build && bun run icons && electron-builder --win nsis --x64",
+    "dist:linux": "bun run build && bun run icons && electron-builder --linux AppImage deb --x64",
+    "start": "electron .",
+    "test": "vitest run src electron --exclude tests/electron.spec.ts",
+    "test:electron": "playwright test tests/electron.spec.ts --workers=1"
+  },
+  "dependencies": {
+    "electron-log": "latest"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "latest",
+    "@codemirror/lang-markdown": "latest",
+    "@codemirror/language": "latest",
+    "@codemirror/state": "latest",
+    "@codemirror/view": "latest",
+    "@testing-library/react": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "cross-env": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "jsdom": "latest",
+    "lucide-react": "latest",
+    "playwright": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "sharp": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest",
+    "wait-on": "latest"
+  },
+  "build": {
+    "appId": "dev.pinote.desktop",
+    "productName": "Pinote",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "!electron/**/*.test.*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/generated/icon.png",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "icon": "build/generated/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Pinote",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/generated/icons",
+      "category": "Utility",
+      "executableName": "pinote",
+      "synopsis": "A focused desktop sticky note app",
+      "description": "A focused desktop sticky note app with Markdown and Emacs key bindings",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

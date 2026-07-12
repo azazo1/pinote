@@ -1,0 +1,8 @@
+.git
+.env
+node_modules
+dist
+release
+test-results
+server/target
+secrets
