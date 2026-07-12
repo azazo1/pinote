@@ -14,6 +14,17 @@ test("主窗口和便签窗口关键流程", async () => {
     expect(mainWindow).toBeTruthy();
     if (!mainWindow) throw new Error("主窗口未创建");
 
+    const mainWorkspaceState = await app.evaluate(({ BrowserWindow }, url) => {
+      const main = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      return {
+        platform: process.platform,
+        alwaysOnTop: main?.isAlwaysOnTop(),
+        visibleOnAllWorkspaces: main?.isVisibleOnAllWorkspaces(),
+      };
+    }, mainWindow.url());
+    expect(mainWorkspaceState.alwaysOnTop).toBe(false);
+    if (mainWorkspaceState.platform === "darwin") expect(mainWorkspaceState.visibleOnAllWorkspaces).toBe(false);
+
     await expect(mainWindow.locator(".main-shell")).toBeVisible();
     await expect(mainWindow.getByText("还没有便签")).toBeVisible();
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
@@ -324,6 +335,17 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(true);
     const shelf = app.windows().find((page) => page.url().includes("view=shelf"));
     expect(shelf).toBeTruthy();
+    const shelfWorkspaceState = await app.evaluate(({ BrowserWindow }) => {
+      const shelfWindow = BrowserWindow.getAllWindows()
+        .find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
+      return {
+        platform: process.platform,
+        alwaysOnTop: shelfWindow?.isAlwaysOnTop(),
+        visibleOnAllWorkspaces: shelfWindow?.isVisibleOnAllWorkspaces(),
+      };
+    });
+    expect(shelfWorkspaceState.alwaysOnTop).toBe(true);
+    if (shelfWorkspaceState.platform === "darwin") expect(shelfWorkspaceState.visibleOnAllWorkspaces).toBe(true);
     await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("shelf");
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
     await expect.poll(() => readWindowVisible(window.url())).toBe(false);

@@ -24,6 +24,10 @@ let quitReady = false;
 if (process.env.PINOTE_USER_DATA) app.setPath("userData", process.env.PINOTE_USER_DATA);
 
 app.whenReady().then(async () => {
+  if (process.platform === "darwin") {
+    app.setActivationPolicy("regular");
+    log.info("macOS 应用窗口策略已设置", { activationPolicy: "regular" });
+  }
   log.info("Pinote 正在启动", { platform: process.platform, electron: process.versions.electron });
   store = new NoteStore(app.getPath("userData"));
   await store.load();

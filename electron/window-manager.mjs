@@ -187,7 +187,10 @@ export class WindowManager {
 
     this.windows.set(note.id, window);
     if (process.platform === "darwin") {
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
     }
     this.applyPinnedLevel(window, state.pinned);
     this.loadRenderer(window, { noteId: note.id });
@@ -571,7 +574,10 @@ export class WindowManager {
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
     if (process.platform === "darwin") {
-      shelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      shelf.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
     }
     this.loadRenderer(shelf, {
       view: "shelf",
