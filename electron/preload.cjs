@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   closeNote: (id) => ipcRenderer.invoke("note:close", id),
   deleteNote: (id) => ipcRenderer.invoke("note:delete", id),
   openMainWindow: () => ipcRenderer.invoke("window:open-main"),
+  requestQuit: () => ipcRenderer.invoke("app:request-quit"),
   toggleCollapse: (id) => ipcRenderer.invoke("window:toggle-collapse", id),
   moveWindow: (id, x, y) => ipcRenderer.send("window:move", id, x, y),
   beginWindowResize: (id) => ipcRenderer.send("window:resize-start", id),

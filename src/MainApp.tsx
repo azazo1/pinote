@@ -1,4 +1,4 @@
-import { Cloud, Folder, Hash, Plus, Search, StickyNote, X } from "lucide-react";
+import { Cloud, Folder, Hash, Plus, Power, Search, StickyNote, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { MainNoteList } from "./components/MainNoteList";
 import { SyncPanel } from "./components/SyncPanel";
@@ -14,6 +14,7 @@ export default function MainApp() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
   const [creating, setCreating] = useState(false);
+  const [quitting, setQuitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
 
@@ -131,6 +132,19 @@ export default function MainApp() {
     }
   }
 
+  async function requestQuit() {
+    if (quitting) return;
+    setQuitting(true);
+    setActionError("");
+    try {
+      await noteAPI.requestQuit();
+    } catch {
+      setActionError("无法退出应用, 请稍后重试");
+    } finally {
+      setQuitting(false);
+    }
+  }
+
   const ungroupedCount = notes.filter((note) => !note.groupName.trim()).length;
   const hasActiveFilters = Boolean(query.trim()) || groupFilter !== null || tagFilters.length > 0;
   const noMatches = notes.length > 0 && visibleNotes.length === 0;
@@ -156,6 +170,16 @@ export default function MainApp() {
           <span>{notes.length}</span>
         </div>
         <div className="main-header-actions">
+          <button
+            className="main-icon-button main-quit-button"
+            type="button"
+            aria-label="退出 Pinote"
+            title="退出 Pinote"
+            disabled={quitting}
+            onClick={() => void requestQuit()}
+          >
+            <Power size={17} />
+          </button>
           <button
             className={`main-icon-button sync-${syncStatus.state}`}
             type="button"

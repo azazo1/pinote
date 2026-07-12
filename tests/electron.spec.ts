@@ -747,3 +747,103 @@ test("主窗口和便签窗口关键流程", async () => {
     await app.close();
   }
 });
+
+test("主窗口确认退出并保存待写入内容", async () => {
+  const userData = `/private/tmp/pinote-quit-e2e-${Date.now()}`;
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: userData },
+  });
+  let exited = false;
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+    const quitButton = mainWindow.locator(".main-quit-button");
+    await expect(quitButton).toBeVisible();
+    await expect(quitButton).toHaveCSS("width", "32px");
+
+    await mainWindow.locator(".main-create-button").click();
+    await expect.poll(() => app.windows().some((page) => page.url().includes("noteId="))).toBe(true);
+    const noteWindow = app.windows().find((page) => page.url().includes("noteId="));
+    if (!noteWindow) throw new Error("便签窗口未创建");
+    const noteId = new URL(noteWindow.url()).searchParams.get("noteId");
+    if (!noteId) throw new Error("便签 id 不存在");
+    await noteWindow.locator(".title-input").fill("退出保存验证");
+    await noteWindow.locator(".note-editor .cm-content").fill("尚未完成防抖保存的内容");
+
+    await app.evaluate(({ dialog }) => {
+      const state = globalThis as typeof globalThis & {
+        __pinoteQuitDialogCount?: number;
+        __pinoteQuitDialogOwner?: string;
+        __pinoteQuitDialogResponse?: number;
+      };
+      state.__pinoteQuitDialogCount = 0;
+      state.__pinoteQuitDialogOwner = "";
+      state.__pinoteQuitDialogResponse = 0;
+      Object.defineProperty(dialog, "showMessageBox", {
+        configurable: true,
+        value: async (owner: Electron.BrowserWindow) => {
+          state.__pinoteQuitDialogCount = (state.__pinoteQuitDialogCount ?? 0) + 1;
+          state.__pinoteQuitDialogOwner = owner.webContents.getURL();
+          return { response: state.__pinoteQuitDialogResponse ?? 0, checkboxChecked: false };
+        },
+      });
+    });
+
+    expect(await noteWindow.evaluate(() => window.noteAPI.requestQuit())).toBe(false);
+    expect(await app.evaluate(() => (
+      globalThis as typeof globalThis & { __pinoteQuitDialogCount?: number }
+    ).__pinoteQuitDialogCount)).toBe(0);
+
+    await quitButton.click();
+    await expect.poll(() => app.evaluate(() => (
+      globalThis as typeof globalThis & { __pinoteQuitDialogCount?: number }
+    ).__pinoteQuitDialogCount)).toBe(1);
+    expect(await app.evaluate(() => (
+      globalThis as typeof globalThis & { __pinoteQuitDialogOwner?: string }
+    ).__pinoteQuitDialogOwner)).toContain("view=main");
+    const cancelledState = await app.evaluate(({ BrowserWindow }, url) => {
+      const main = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      return { visible: main?.isVisible(), destroyed: main?.isDestroyed() };
+    }, mainWindow.url());
+    expect(cancelledState).toEqual({ visible: true, destroyed: false });
+    await expect(quitButton).toBeEnabled();
+
+    await app.evaluate(() => {
+      const state = globalThis as typeof globalThis & { __pinoteQuitDialogResponse?: number };
+      state.__pinoteQuitDialogResponse = 1;
+    });
+    const pendingMarkdown = `退出前即时内容 ${Date.now()}`;
+    await noteWindow.locator(".note-editor .cm-content").fill(pendingMarkdown);
+    const beforeQuit = await noteWindow.evaluate(async (id) => (await window.noteAPI.getNote(id)).note, noteId);
+    expect(beforeQuit?.markdown).not.toBe(pendingMarkdown);
+    const process = app.process();
+    const exitPromise = new Promise<number | null>((resolve) => {
+      if (process.exitCode !== null) resolve(process.exitCode);
+      else process.once("exit", (code) => resolve(code));
+    });
+    await quitButton.dispatchEvent("click");
+    expect(await exitPromise).toBe(0);
+    exited = true;
+
+    const restored = await electron.launch({
+      args: ["."],
+      cwd: path.resolve("."),
+      env: { ...process.env, PINOTE_USER_DATA: userData },
+    });
+    try {
+      await expect.poll(() => restored.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+      const restoredMain = restored.windows().find((page) => page.url().includes("view=main"));
+      if (!restoredMain) throw new Error("恢复后的主窗口未创建");
+      await expect(restoredMain.getByText("退出保存验证")).toBeVisible();
+      const restoredNote = await restoredMain.evaluate(async (id) => (await window.noteAPI.getNote(id)).note, noteId);
+      expect(restoredNote?.markdown).toBe(pendingMarkdown);
+    } finally {
+      await restored.close();
+    }
+  } finally {
+    if (!exited) await app.close();
+  }
+});

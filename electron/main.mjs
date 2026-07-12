@@ -20,6 +20,7 @@ let sync;
 let tray = null;
 let quitStarted = false;
 let quitReady = false;
+let quitConfirmationOpen = false;
 
 if (process.env.PINOTE_USER_DATA) app.setPath("userData", process.env.PINOTE_USER_DATA);
 
@@ -133,6 +134,35 @@ function registerIpc() {
     sync.schedule();
   });
   ipcMain.handle("window:open-main", () => windows.openMainWindow() !== null);
+  ipcMain.handle("app:request-quit", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (
+      quitStarted ||
+      quitConfirmationOpen ||
+      !owner ||
+      owner.isDestroyed() ||
+      owner !== windows.mainWindow
+    ) return false;
+
+    quitConfirmationOpen = true;
+    try {
+      const result = await dialog.showMessageBox(owner, {
+        type: "warning",
+        buttons: ["取消", "退出 Pinote"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        message: "退出 Pinote?",
+        detail: "所有便签窗口将关闭, 后台同步也会停止.",
+      });
+      if (result.response !== 1) return false;
+      log.info("用户从主窗口确认退出应用");
+      app.quit();
+      return true;
+    } finally {
+      quitConfirmationOpen = false;
+    }
+  });
   ipcMain.handle("window:toggle-collapse", (_event, id) => windows.toggleCollapse(validId(id)));
   ipcMain.on("window:move", (_event, id, x, y) => {
     if (Number.isFinite(x) && Number.isFinite(y)) windows.move(validId(id), x, y);

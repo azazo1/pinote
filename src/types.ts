@@ -70,6 +70,7 @@ export interface NoteAPI {
   openNote: (id: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;
   openMainWindow: () => Promise<boolean>;
+  requestQuit: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;
   moveWindow: (id: string, x: number, y: number) => void;
   beginWindowResize: (id: string) => void;
