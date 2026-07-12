@@ -9,7 +9,7 @@ interface TitleBarProps {
   colorPickerOpen: boolean;
   onToggleColorPicker: () => void;
   onTogglePinned: () => void;
-  onDelete: () => void;
+  onClose: () => void;
   onCollapse: () => void;
   nativeDrag?: boolean;
 }
@@ -59,7 +59,7 @@ export function TitleBar(props: TitleBarProps) {
       <div className="window-actions">
         <IconButton icon={Palette} label="便签颜色" active={props.colorPickerOpen} onClick={props.onToggleColorPicker} />
         <IconButton icon={Pin} label="置顶" active={props.pinned} onClick={props.onTogglePinned} />
-        <IconButton icon={X} label="删除便签" danger onClick={props.onDelete} />
+        <IconButton icon={X} label="关闭便签" onClick={props.onClose} />
       </div>
     </header>
   );

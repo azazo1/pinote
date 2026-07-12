@@ -9,13 +9,17 @@ export interface Note {
   dirty: boolean;
   collapsed: boolean;
   pinned: boolean;
+  open: boolean;
 }
 
 export interface NoteSummary {
   id: string;
   title: string;
+  markdown: string;
   color: string;
   modifiedAt: number;
+  open: boolean;
+  pinned: boolean;
 }
 
 export interface GroupState {
@@ -33,7 +37,10 @@ export interface NoteAPI {
   getNote: (id: string) => Promise<{ note: Note | null; group: GroupState; capabilities: PlatformCapabilities }>;
   updateNote: (id: string, patch: Pick<Partial<Note>, "title" | "markdown" | "color">) => Promise<Note | null>;
   createNote: () => Promise<Note>;
+  closeNote: (id: string) => Promise<boolean>;
+  openNote: (id: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;
+  openMainWindow: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;
   moveWindow: (id: string, x: number, y: number) => void;
   setPinned: (id: string, pinned: boolean) => Promise<void>;

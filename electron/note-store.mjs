@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 const DEFAULT_COLOR = "lemon";
 
 export class NoteStore {
@@ -24,7 +24,6 @@ export class NoteStore {
       this.state = createEmptyState();
     }
 
-    if (this.state.notes.length === 0) this.createWelcomeNote();
     await this.save();
     return this.state;
   }
@@ -45,12 +44,21 @@ export class NoteStore {
       ...note,
       collapsed: windowState.collapsed,
       pinned: windowState.pinned,
+      open: windowState.open,
     };
   }
 
   listSummaries() {
     return this.state.notes
-      .map((note) => ({ id: note.id, title: note.title, color: note.color, modifiedAt: note.modifiedAt }))
+      .map((note) => ({
+        id: note.id,
+        title: note.title,
+        markdown: note.markdown,
+        color: note.color,
+        modifiedAt: note.modifiedAt,
+        open: this.getWindowState(note.id).open,
+        pinned: this.getWindowState(note.id).pinned,
+      }))
       .sort((left, right) => right.modifiedAt - left.modifiedAt);
   }
 
@@ -68,6 +76,7 @@ export class NoteStore {
     }, this.state.deviceId);
     this.state.notes.push(note);
     this.state.windows[note.id] = createWindowState({
+      open: true,
       bounds: Number.isFinite(position.x) && Number.isFinite(position.y)
         ? { x: position.x, y: position.y, width: 253, height: 220 }
         : undefined,
@@ -163,7 +172,7 @@ export class NoteStore {
         ...remote,
         dirty: false,
       }, this.state.deviceId));
-      if (!local && !this.state.windows[remote.id]) this.state.windows[remote.id] = createWindowState();
+      if (!local && !this.state.windows[remote.id]) this.state.windows[remote.id] = createWindowState({ open: false });
       previous.delete(remote.id);
     }
 
@@ -196,13 +205,6 @@ export class NoteStore {
     return this.writeQueue;
   }
 
-  createWelcomeNote() {
-    const note = this.createNote();
-    this.updateContent(note.id, {
-      title: "第一张便签",
-      markdown: "## 欢迎使用 Pinote\n\n- 支持 **Markdown** 实时预览\n- 支持 Emacs 光标移动\n- 便签组可以收进屏幕侧边",
-    });
-  }
 }
 
 function createEmptyState() {
@@ -270,6 +272,7 @@ function createWindowState(value = {}) {
     bounds: value.bounds ?? { width: 253, height: 220 },
     collapsed: value.collapsed,
     pinned: value.pinned,
+    open: value.open,
     dockState: value.dockState,
   });
 }
@@ -287,6 +290,7 @@ function normalizeWindowState(value) {
     },
     collapsed: Boolean(value?.collapsed),
     pinned: Boolean(value?.pinned),
+    open: value?.open !== false,
     dockState: value?.dockState === "active" ? "active" : "free",
   };
 }

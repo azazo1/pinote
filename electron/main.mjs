@@ -23,12 +23,15 @@ app.whenReady().then(async () => {
   sync = new SyncService(store, windows);
   registerIpc();
   installMenu();
-  for (const note of store.state.notes) windows.open(note);
+  windows.openMainWindow();
+  for (const note of store.state.notes) {
+    if (store.getWindowState(note.id).open) windows.open(note);
+  }
   windows.restoreDockedMode();
   sync.initialize();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) windows.createNearFocused();
+    windows.openMainWindow();
   });
 }).catch((error) => {
   log.error("Pinote 启动失败", error);
@@ -66,6 +69,8 @@ function registerIpc() {
     sync.schedule();
     return note;
   });
+  ipcMain.handle("note:open", (_event, id) => windows.openNote(validId(id)));
+  ipcMain.handle("note:close", (_event, id) => windows.closeNote(validId(id)));
   ipcMain.handle("note:delete", async (event, id) => {
     id = validId(id);
     const owner = BrowserWindow.fromWebContents(event.sender);
@@ -82,6 +87,7 @@ function registerIpc() {
     windows.remove(id);
     sync.schedule();
   });
+  ipcMain.handle("window:open-main", () => windows.openMainWindow() !== null);
   ipcMain.handle("window:toggle-collapse", (_event, id) => windows.toggleCollapse(validId(id)));
   ipcMain.on("window:move", (_event, id, x, y) => {
     if (Number.isFinite(x) && Number.isFinite(y)) windows.move(validId(id), x, y);
@@ -106,6 +112,8 @@ function installMenu() {
       label: "Pinote",
       submenu: [
         { label: "关于 Pinote", role: "about" },
+        { type: "separator" },
+        { label: "打开主窗口", click: () => windows.openMainWindow() },
         { type: "separator" },
         { label: "隐藏 Pinote", role: "hide" },
         { label: "退出 Pinote", role: "quit" },

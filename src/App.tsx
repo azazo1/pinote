@@ -1,9 +1,8 @@
-import { Cloud, PanelRightClose, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ColorPicker, noteColors } from "./components/ColorPicker";
-import { IconButton } from "./components/IconButton";
 import { InlineShelf } from "./components/InlineShelf";
 import { NoteEditor } from "./components/NoteEditor";
+import { NoteMenu } from "./components/NoteMenu";
 import { SyncPanel } from "./components/SyncPanel";
 import { TitleBar } from "./components/TitleBar";
 import { dateLabel } from "./lib/date-label";
@@ -20,16 +19,24 @@ export default function App() {
   const saveTimer = useRef<number | null>(null);
   const pendingPatch = useRef<Pick<Partial<Note>, "title" | "markdown" | "color">>({});
 
+  const flushPendingPatch = useCallback(async () => {
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const nextPatch = pendingPatch.current;
+    pendingPatch.current = {};
+    if (Object.keys(nextPatch).length > 0) await window.noteAPI.updateNote(noteId, nextPatch);
+  }, [noteId]);
+
   const applyContentPatch = useCallback((patch: Pick<Partial<Note>, "title" | "markdown" | "color">) => {
     setNote((current) => current ? { ...current, ...patch, modifiedAt: Date.now(), dirty: true } : current);
     pendingPatch.current = { ...pendingPatch.current, ...patch };
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const nextPatch = pendingPatch.current;
-      pendingPatch.current = {};
-      void window.noteAPI.updateNote(noteId, nextPatch);
+      void flushPendingPatch();
     }, 280);
-  }, [noteId]);
+  }, [flushPendingPatch]);
 
   const toggleCollapse = useCallback(() => {
     void window.noteAPI.toggleCollapse(noteId);
@@ -58,9 +65,9 @@ export default function App() {
       offRemote();
       offSync();
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      if (Object.keys(pendingPatch.current).length > 0) void window.noteAPI.updateNote(noteId, pendingPatch.current);
+      void flushPendingPatch();
     };
-  }, [noteId, toggleCollapse]);
+  }, [flushPendingPatch, noteId, toggleCollapse]);
 
   if (!note) return <main className="loading-note" aria-label="正在加载" />;
 
@@ -90,7 +97,11 @@ export default function App() {
           setNote((current) => current ? { ...current, pinned } : current);
           void window.noteAPI.setPinned(note.id, pinned);
         }}
-        onDelete={() => void window.noteAPI.deleteNote(note.id)}
+        onClose={() => {
+          void flushPendingPatch().finally(() => {
+            void window.noteAPI.closeNote(note.id);
+          });
+        }}
         onCollapse={toggleCollapse}
         nativeDrag={capabilities.wayland}
       />
@@ -123,13 +134,13 @@ export default function App() {
       <footer className="note-footer">
         <time dateTime={new Date(note.modifiedAt).toISOString()}>{dateLabel(note.modifiedAt)}</time>
         <div className="footer-actions">
-          <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createNote()} />
-          <IconButton icon={Cloud} label="同步设置" active={syncOpen || syncStatus.state === "syncing"} onClick={() => setSyncOpen((open) => !open)} />
-          <IconButton
-            icon={PanelRightClose}
-            label="侧边吸附便签组"
-            active={group.docked}
-            onClick={() => void window.noteAPI.toggleGroupDock().then(setGroup)}
+          <NoteMenu
+            docked={group.docked}
+            onCreate={() => void window.noteAPI.createNote()}
+            onToggleDock={() => void window.noteAPI.toggleGroupDock().then(setGroup)}
+            onOpenMainWindow={() => void window.noteAPI.openMainWindow()}
+            onOpenSync={() => setSyncOpen(true)}
+            onDelete={() => void window.noteAPI.deleteNote(note.id)}
           />
         </div>
       </footer>

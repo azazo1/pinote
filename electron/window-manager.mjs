@@ -13,11 +13,14 @@ const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = 90;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 220;
+const MAIN_WINDOW_WIDTH = 640;
+const MAIN_WINDOW_HEIGHT = 500;
 
 export class WindowManager {
   constructor(store) {
     this.store = store;
     this.windows = new Map();
+    this.mainWindow = null;
     this.shelfWindow = null;
     this.shelfExpanded = false;
     this.activeDockedId = null;
@@ -34,7 +37,45 @@ export class WindowManager {
     return { platform: process.platform, wayland: this.wayland };
   }
 
+  openMainWindow() {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      if (this.mainWindow.isMinimized()) this.mainWindow.restore();
+      this.mainWindow.show();
+      this.mainWindow.focus();
+      log.info("已打开主窗口");
+      return this.mainWindow;
+    }
+
+    const window = new BrowserWindow({
+      width: MAIN_WINDOW_WIDTH,
+      height: MAIN_WINDOW_HEIGHT,
+      minWidth: 480,
+      minHeight: 360,
+      show: false,
+      title: "Pinote",
+      backgroundColor: "#f5f5f2",
+      webPreferences: rendererPreferences(),
+    });
+    this.mainWindow = window;
+    this.loadRenderer(window, { view: "main" });
+    window.once("ready-to-show", () => window.show());
+    window.webContents.on("did-finish-load", () => {
+      window.webContents.send("notes:list", this.store.listSummaries());
+    });
+    window.webContents.on("render-process-gone", (_event, details) => {
+      log.error("主窗口渲染进程退出", { reason: details.reason });
+    });
+    window.on("closed", () => {
+      if (this.mainWindow === window) this.mainWindow = null;
+    });
+    log.info("已创建主窗口");
+    return window;
+  }
+
   open(note) {
+    const existing = this.windows.get(note.id);
+    if (existing && !existing.isDestroyed()) return existing;
+    if (existing) this.windows.delete(note.id);
     const state = this.store.getWindowState(note.id);
     const display = this.findDisplay(state);
     const bounds = this.clampBounds(state.bounds, display.workArea);
@@ -72,7 +113,7 @@ export class WindowManager {
     window.on("move", () => this.persistBounds(note.id));
     window.on("closed", () => {
       this.cancelAnimation(window);
-      this.windows.delete(note.id);
+      if (this.windows.get(note.id) === window) this.windows.delete(note.id);
     });
     window.webContents.on("render-process-gone", (_event, details) => {
       log.error("便签渲染进程退出", { id: note.id, reason: details.reason });
@@ -80,15 +121,58 @@ export class WindowManager {
     return window;
   }
 
+  openNote(id) {
+    const note = this.store.getNote(id);
+    if (!note) return null;
+    this.store.updateWindow(id, { open: true });
+    const existing = this.windows.get(id);
+    const window = this.open(note);
+    const activate = () => {
+      if (window.isDestroyed()) return;
+      if (this.store.state.groupDocked) {
+        this.activateDockedNote(id);
+      } else {
+        window.show();
+        window.focus();
+      }
+    };
+    if (!existing || existing.isDestroyed()) window.once("ready-to-show", activate);
+    else activate();
+    this.broadcastNoteList();
+    log.info("已打开便签窗口", { id });
+    return this.store.getRenderableNote(id);
+  }
+
+  closeNote(id) {
+    if (!this.store.updateWindow(id, { open: false })) return false;
+    const window = this.windows.get(id);
+    if (this.activeDockedId === id) this.activeDockedId = null;
+    this.windows.delete(id);
+    window?.hide();
+    if (window) {
+      setImmediate(() => {
+        if (!window.isDestroyed()) window.close();
+      });
+    }
+    this.broadcastNoteList();
+    this.sendGroupState();
+    log.info("已关闭便签窗口", { id });
+    return true;
+  }
+
   restoreDockedMode() {
     if (!this.store.state.groupDocked) return;
+    if (this.store.state.notes.length === 0) {
+      this.store.setGroupDocked(false, this.wayland ? "inline" : "shelf");
+      return;
+    }
     const mode = this.wayland ? "inline" : "shelf";
     this.store.setGroupDocked(true, mode);
     if (mode === "shelf") {
       for (const window of this.windows.values()) window.hide();
       this.ensureShelfWindow();
     } else {
-      const firstId = this.store.state.notes[0]?.id ?? null;
+      const firstId = this.windows.keys().next().value ?? null;
       this.activeDockedId = firstId;
       for (const [id, window] of this.windows) id === firstId ? window.show() : window.hide();
     }
@@ -97,7 +181,7 @@ export class WindowManager {
 
   createNearFocused() {
     const focused = BrowserWindow.getFocusedWindow();
-    const bounds = focused && focused !== this.shelfWindow ? focused.getBounds() : null;
+    const bounds = focused && focused !== this.shelfWindow && focused !== this.mainWindow ? focused.getBounds() : null;
     const note = this.store.createNote({
       x: bounds ? bounds.x + 28 : undefined,
       y: bounds ? bounds.y + 28 : undefined,
@@ -159,6 +243,7 @@ export class WindowManager {
     if (!window) return;
     window.setAlwaysOnTop(Boolean(pinned), "floating");
     this.store.updateWindow(id, { pinned: Boolean(pinned) });
+    this.broadcastNoteList();
     log.info(pinned ? "便签已置顶" : "便签已取消置顶", { id });
   }
 
@@ -166,12 +251,16 @@ export class WindowManager {
     const window = this.windows.get(id);
     if (!this.store.deleteNote(id)) return;
     window?.destroy();
+    this.windows.delete(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
-    if (this.store.state.notes.length === 0) this.createNearFocused();
+    if (this.store.state.notes.length === 0 && this.store.state.groupDocked) this.leaveDockedMode();
     this.broadcastNoteList();
   }
 
   toggleGroupDock() {
+    if (!this.store.state.groupDocked && this.store.state.notes.length === 0) {
+      return { docked: false, mode: this.store.state.dockMode };
+    }
     const docked = !this.store.state.groupDocked;
     if (docked) this.enterDockedMode();
     else this.leaveDockedMode();
@@ -183,7 +272,9 @@ export class WindowManager {
     const mode = this.wayland ? "inline" : "shelf";
     this.store.setGroupDocked(true, mode);
     const focused = BrowserWindow.getFocusedWindow();
-    this.activeDockedId = [...this.windows].find(([, window]) => window === focused)?.[0] ?? this.store.state.notes[0]?.id ?? null;
+    this.activeDockedId = [...this.windows].find(([, window]) => window === focused)?.[0]
+      ?? this.windows.keys().next().value
+      ?? null;
 
     if (mode === "shelf") {
       for (const window of this.windows.values()) window.hide();
@@ -282,10 +373,19 @@ export class WindowManager {
   }
 
   activateDockedNote(id) {
-    if (!this.store.state.groupDocked || !this.windows.has(id)) return;
+    if (!this.store.state.groupDocked) return;
+    let window = this.windows.get(id);
+    if (!window || window.isDestroyed()) {
+      const note = this.store.getNote(id);
+      if (!note) return;
+      this.store.updateWindow(id, { open: true });
+      window = this.open(note);
+      window.once("ready-to-show", () => this.activateDockedNote(id));
+      this.broadcastNoteList();
+      return this.store.getRenderableNote(id);
+    }
     if (this.activeDockedId && this.activeDockedId !== id) this.windows.get(this.activeDockedId)?.hide();
     this.activeDockedId = id;
-    const window = this.windows.get(id);
     if (this.store.state.dockMode === "inline") {
       window.show();
       window.focus();
@@ -307,24 +407,31 @@ export class WindowManager {
     window.setBounds(bounds, false);
     window.show();
     window.focus();
+    return this.store.getRenderableNote(id);
   }
 
   reconcileRemoteState() {
     const activeIds = new Set(this.store.state.notes.map((note) => note.id));
     for (const [id, window] of this.windows) {
-      if (!activeIds.has(id)) window.destroy();
+      if (!activeIds.has(id) || !this.store.getWindowState(id).open) {
+        window.destroy();
+        this.windows.delete(id);
+        if (this.activeDockedId === id) this.activeDockedId = null;
+      }
     }
     for (const note of this.store.state.notes) {
+      const state = this.store.getWindowState(note.id);
+      if (!state.open) continue;
       const window = this.windows.get(note.id);
       if (!window || window.isDestroyed()) {
         this.open(note);
         continue;
       }
-      const state = this.store.getWindowState(note.id);
       window.setAlwaysOnTop(state.pinned, "floating");
       window.webContents.send("note:remote", this.store.getRenderableNote(note.id));
       if (this.store.state.groupDocked && note.id !== this.activeDockedId) window.hide();
     }
+    if (this.store.state.notes.length === 0 && this.store.state.groupDocked) this.leaveDockedMode();
     this.broadcastNoteList();
     this.sendGroupState();
   }
@@ -450,7 +557,7 @@ export class WindowManager {
   }
 
   broadcast(channel, payload) {
-    const targets = [...this.windows.values(), this.shelfWindow];
+    const targets = [...this.windows.values(), this.shelfWindow, this.mainWindow];
     for (const window of targets) {
       if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
     }

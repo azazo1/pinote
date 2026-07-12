@@ -491,6 +491,74 @@ button {
   white-space: nowrap;
 }
 
+.note-menu-root {
+  position: relative;
+}
+
+.note-menu-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-menu {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  bottom: calc(100% + 4px);
+  display: grid;
+  width: 152px;
+  padding: 3px;
+  color: #30302d;
+  background: rgb(255 255 255 / 96%);
+  border: 1px solid rgb(45 42 30 / 14%);
+  border-radius: 4px;
+  box-shadow: 0 10px 24px rgb(35 32 18 / 20%);
+  backdrop-filter: blur(16px);
+}
+
+.note-menu-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 27px;
+  gap: 6px;
+  padding: 0 6px;
+  color: #393936;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-menu-item:hover,
+.note-menu-item:focus-visible {
+  background: rgb(40 40 36 / 8%);
+  outline: none;
+}
+
+.note-menu-item svg {
+  color: #6c6b65;
+}
+
+.note-menu-item.is-danger {
+  color: #8d2d27;
+}
+
+.note-menu-item.is-danger svg {
+  color: currentColor;
+}
+
+.note-menu-separator {
+  height: 1px;
+  margin: 3px 4px;
+  background: rgb(40 40 36 / 10%);
+}
+
 .is-collapsed .note-content,
 .is-collapsed .note-footer,
 .is-collapsed .color-picker {
