@@ -1,4 +1,4 @@
-import { Palette, Pin, X } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Pin, X } from "lucide-react";
 import { useRef, type PointerEvent } from "react";
 import { IconButton } from "./IconButton";
 
@@ -6,8 +6,8 @@ interface TitleBarProps {
   noteId: string;
   title: string;
   pinned: boolean;
-  colorPickerOpen: boolean;
-  onToggleColorPicker: () => void;
+  docked: boolean;
+  onToggleDock: () => void;
   onTogglePinned: () => void;
   onClose: () => void;
   onCollapse: () => void;
@@ -57,7 +57,12 @@ export function TitleBar(props: TitleBarProps) {
     >
       <span className="collapsed-title">{props.title || "无标题"}</span>
       <div className="window-actions">
-        <IconButton icon={Palette} label="便签颜色" active={props.colorPickerOpen} onClick={props.onToggleColorPicker} />
+        <IconButton
+          icon={props.docked ? PanelRightOpen : PanelRightClose}
+          label={props.docked ? "移出侧边" : "收纳到侧边"}
+          active={props.docked}
+          onClick={props.onToggleDock}
+        />
         <IconButton icon={Pin} label="置顶" active={props.pinned} onClick={props.onTogglePinned} />
         <IconButton icon={X} label="关闭便签" onClick={props.onClose} />
       </div>

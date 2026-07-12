@@ -2,8 +2,7 @@ import {
   AppWindow,
   Cloud,
   Ellipsis,
-  PanelRightClose,
-  PanelRightOpen,
+  Palette,
   Plus,
   Trash2,
   type LucideIcon,
@@ -11,9 +10,8 @@ import {
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 interface NoteMenuProps {
-  docked: boolean;
   onCreate: () => void;
-  onToggleDock: () => void;
+  onOpenColorPicker: () => void;
   onOpenMainWindow: () => void;
   onOpenSync: () => void;
   onDelete: () => void;
@@ -113,11 +111,7 @@ export function NoteMenu(props: NoteMenuProps) {
           onKeyDown={navigateMenu}
         >
           <MenuItem icon={Plus} label="新建便签" onSelect={() => select(props.onCreate)} />
-          <MenuItem
-            icon={props.docked ? PanelRightOpen : PanelRightClose}
-            label={props.docked ? "移出侧边" : "收纳到侧边"}
-            onSelect={() => select(props.onToggleDock)}
-          />
+          <MenuItem icon={Palette} label="便签颜色" onSelect={() => select(props.onOpenColorPicker)} />
           <MenuItem icon={AppWindow} label="打开主窗口" onSelect={() => select(props.onOpenMainWindow)} />
           <MenuItem icon={Cloud} label="云同步" onSelect={() => select(props.onOpenSync)} />
           <div className="note-menu-separator" role="separator" />

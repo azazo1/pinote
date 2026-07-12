@@ -289,6 +289,12 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(menu.getByRole("menuitem")).toHaveCount(5);
     await expect(menu.getByText("开始专注")).toHaveCount(0);
     await window.screenshot({ path: "/private/tmp/pinote-note-menu.png" });
+    await menu.getByRole("menuitem", { name: "便签颜色" }).click();
+    await expect(window.locator(".color-picker")).toBeVisible();
+    await window.locator(".color-swatch").first().click();
+    await expect(window.locator(".color-picker")).toHaveCount(0);
+    await window.getByLabel("便签操作").click();
+    await expect(menu).toBeVisible();
     await menu.getByRole("menuitem", { name: "云同步" }).click();
     await expect(window.locator(".sync-panel")).toBeVisible();
     await window.screenshot({ path: "/private/tmp/pinote-sync-panel.png" });
@@ -370,8 +376,11 @@ test("主窗口和便签窗口关键流程", async () => {
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.url)?.setSize(input.width, input.height);
     }, { url: window.url(), width: 360, height: 300 });
     await expect.poll(() => window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 360, height: 300 });
+    await triggerShortcut(window, "toggle-color-picker");
+    await expect(window.locator(".color-picker")).toBeVisible();
     await triggerShortcut(window, "toggle-collapse");
     await expect(shell).toHaveClass(/is-collapsed/);
+    await expect(window.locator(".color-picker")).toHaveCount(0);
     await window.waitForTimeout(150);
     const collapsedSize = await window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
     expect(collapsedSize).toEqual({ width: 253, height: 22 });
@@ -710,8 +719,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await shelf!.getByLabel("展开侧边便签架").click();
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 500 }).toBe(200);
 
-    await secondWindow.getByLabel("便签操作").click();
-    await secondWindow.getByRole("menuitem", { name: "收纳到侧边" }).click();
+    await secondWindow.getByLabel("收纳到侧边").click();
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("shelf");
     await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(false);
     await shelf!.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
@@ -752,8 +760,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.windows().some((page) => page.url() === secondNoteUrl)).toBe(true);
     secondWindow = app.windows().find((page) => page.url() === secondNoteUrl);
     if (!secondWindow) throw new Error("侧边便签未重新打开");
-    await secondWindow.getByLabel("便签操作").click();
-    await secondWindow.getByRole("menuitem", { name: "移出侧边" }).click();
+    await secondWindow.getByLabel("移出侧边").click();
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
     await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {

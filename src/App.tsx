@@ -191,6 +191,10 @@ export default function App() {
   }, []);
 
   const toggleColorPicker = useCallback(() => {
+    if (collapsedRef.current) {
+      setPickerOpen(false);
+      return;
+    }
     setMetadataOpen(false);
     setSyncOpen(false);
     setPickerOpen((open) => !open);
@@ -241,7 +245,10 @@ export default function App() {
       setCapabilities(result.capabilities);
     });
     void window.noteAPI.getSyncStatus().then(setSyncStatus);
-    const offCollapsed = window.noteAPI.onCollapsed((collapsed) => setNote((current) => current ? { ...current, collapsed } : current));
+    const offCollapsed = window.noteAPI.onCollapsed((collapsed) => {
+      setNote((current) => current ? { ...current, collapsed } : current);
+      if (collapsed) setPickerOpen(false);
+    });
     const offGroup = window.noteAPI.onGroupState((state) => {
       setNote((current) => current ? {
         ...current,
@@ -332,8 +339,8 @@ export default function App() {
         noteId={note.id}
         title={note.title}
         pinned={note.pinned}
-        colorPickerOpen={pickerOpen}
-        onToggleColorPicker={toggleColorPicker}
+        docked={docked}
+        onToggleDock={toggleDock}
         onTogglePinned={togglePinned}
         onClose={closeWindow}
         onCollapse={toggleCollapse}
@@ -386,9 +393,8 @@ export default function App() {
             onClick={toggleMetadata}
           />
           <NoteMenu
-            docked={docked}
             onCreate={() => void window.noteAPI.createNote()}
-            onToggleDock={toggleDock}
+            onOpenColorPicker={toggleColorPicker}
             onOpenMainWindow={() => void window.noteAPI.openMainWindow()}
             onOpenSync={() => {
               setMetadataOpen(false);
