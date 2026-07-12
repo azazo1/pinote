@@ -51,7 +51,7 @@ jobs:
         run: cargo test --manifest-path server/Cargo.toml
 
   container:
-    name: Multi-platform container
+    name: Cross-compiled multi-platform container
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -89,7 +89,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: server/Dockerfile
+          file: server/Dockerfile.cross
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.metadata.outputs.tags }}

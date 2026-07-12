@@ -1,0 +1,37 @@
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.23.0@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae AS builder
+
+ARG TARGETARCH
+
+WORKDIR /build
+COPY server/Cargo.toml server/Cargo.lock ./
+COPY server/src ./src
+COPY server/migrations ./migrations
+RUN case "$TARGETARCH" in \
+        amd64) rust_target=x86_64-unknown-linux-gnu ;; \
+        arm64) rust_target=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && rustup target add "$rust_target" \
+    && cargo zigbuild --release --locked --target "${rust_target}.2.28" \
+    && install --directory /out \
+    && install "target/${rust_target}/release/pinote-sync-server" /out/pinote-sync-server
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 pinote \
+    && install --directory --owner pinote --group pinote /data
+
+COPY --from=builder /out/pinote-sync-server /usr/local/bin/pinote-sync-server
+
+USER pinote
+ENV PINOTE_HOST=0.0.0.0 \
+    PINOTE_PORT=8787 \
+    PINOTE_DATA_DIR=/data
+EXPOSE 8787
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl --fail --silent http://127.0.0.1:${PINOTE_PORT}/readyz || exit 1
+ENTRYPOINT ["pinote-sync-server"]
+CMD ["--token-file", "/run/secrets/pinote_token"]
