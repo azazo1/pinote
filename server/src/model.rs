@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 const MAX_DEVICE_ID_BYTES: usize = 128;
 const MAX_NOTE_ID_BYTES: usize = 128;
 const MAX_TITLE_CHARS: usize = 200;
+const MAX_GROUP_NAME_CHARS: usize = 80;
+const MAX_TAGS: usize = 16;
+const MAX_TAG_CHARS: usize = 40;
 const MAX_MARKDOWN_BYTES: usize = 2_000_000;
 const MAX_COLOR_BYTES: usize = 64;
 const MAX_OPERATIONS: usize = 1_000;
@@ -26,6 +29,8 @@ pub struct NoteChange {
     pub title: String,
     pub markdown: String,
     pub color: String,
+    pub group_name: String,
+    pub tags: Vec<String>,
     pub base_revision: i64,
     pub modified_at: i64,
     pub modified_by: String,
@@ -46,6 +51,8 @@ pub struct SyncNote {
     pub title: String,
     pub markdown: String,
     pub color: String,
+    pub group_name: String,
+    pub tags: Vec<String>,
     pub revision: i64,
     pub modified_at: i64,
     pub modified_by: String,
@@ -86,6 +93,13 @@ impl SyncRequest {
             if change.markdown.len() > MAX_MARKDOWN_BYTES {
                 return Err(format!("便签 {} 的 Markdown 内容超过大小限制", change.id));
             }
+            if change.group_name.chars().count() > MAX_GROUP_NAME_CHARS
+                || change.group_name.trim() != change.group_name
+                || change.group_name.chars().any(char::is_control)
+            {
+                return Err(format!("便签 {} 的分组名称无效", change.id));
+            }
+            validate_tags(&change.id, &change.tags)?;
             if change.color.is_empty() || change.color.len() > MAX_COLOR_BYTES {
                 return Err(format!("便签 {} 的颜色值无效", change.id));
             }
@@ -114,6 +128,31 @@ impl SyncRequest {
 fn validate_identifier(name: &str, value: &str, max_bytes: usize) -> Result<(), String> {
     if value.is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         return Err(format!("{name} 无效"));
+    }
+    Ok(())
+}
+
+fn validate_tags(note_id: &str, tags: &[String]) -> Result<(), String> {
+    if tags.len() > MAX_TAGS {
+        return Err(format!("便签 {note_id} 最多允许 {MAX_TAGS} 个标签"));
+    }
+    let mut seen = HashSet::with_capacity(tags.len());
+    for tag in tags {
+        if tag.is_empty()
+            || tag.trim() != tag
+            || tag.starts_with('#')
+            || tag.chars().any(char::is_control)
+        {
+            return Err(format!("便签 {note_id} 的标签无效"));
+        }
+        if tag.chars().count() > MAX_TAG_CHARS {
+            return Err(format!(
+                "便签 {note_id} 的单个标签不能超过 {MAX_TAG_CHARS} 个字符"
+            ));
+        }
+        if !seen.insert(tag.to_lowercase()) {
+            return Err(format!("便签 {note_id} 的标签不能重复"));
+        }
     }
     Ok(())
 }

@@ -1,7 +1,7 @@
 import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorState, type Range } from "@codemirror/state";
+import { EditorState, StateEffect, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -14,12 +14,15 @@ import {
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { emacsMotionTarget, type EmacsMotionKey } from "../editor/emacs-motion";
-import { markdownLinePreview, type MarkdownReplacement } from "../editor/markdown-preview";
+import { markdownLinePreview, markdownTagDecorations, type MarkdownReplacement } from "../editor/markdown-preview";
 
 interface NoteEditorProps {
   content: string;
+  highlightedTags: string[];
   onChange: (content: string) => void;
 }
+
+const refreshMarkdownPreview = StateEffect.define<void>();
 
 class ListMarkerWidget extends WidgetType {
   constructor(readonly replacement: Exclude<MarkdownReplacement, { kind: "task" }>) {
@@ -72,7 +75,7 @@ function replacementWidget(replacement: MarkdownReplacement) {
   return new ListMarkerWidget(replacement);
 }
 
-function buildPreviewDecorations(view: EditorView) {
+function buildPreviewDecorations(view: EditorView, highlightedTags: readonly string[]) {
   const ranges: Array<Range<Decoration>> = [];
   const activeLine = view.state.doc.lineAt(view.state.selection.main.head).number;
 
@@ -95,25 +98,36 @@ function buildPreviewDecorations(view: EditorView) {
     }
   }
 
+  for (const decoration of markdownTagDecorations(view.state.doc.toString(), highlightedTags)) {
+    if (decoration.kind === "mark" && decoration.from < decoration.to) {
+      ranges.push(Decoration.mark({ class: decoration.className }).range(decoration.from, decoration.to));
+    }
+  }
+
   return Decoration.set(ranges, true);
 }
 
-const markdownPreviewPlugin = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+function markdownPreviewPlugin(highlightedTags: { current: readonly string[] }) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
 
-    constructor(view: EditorView) {
-      this.decorations = buildPreviewDecorations(view);
-    }
-
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
-        this.decorations = buildPreviewDecorations(update.view);
+      constructor(view: EditorView) {
+        this.decorations = buildPreviewDecorations(view, highlightedTags.current);
       }
-    }
-  },
-  { decorations: (plugin) => plugin.decorations },
-);
+
+      update(update: ViewUpdate) {
+        const refreshRequested = update.transactions.some((transaction) => (
+          transaction.effects.some((effect) => effect.is(refreshMarkdownPreview))
+        ));
+        if (update.docChanged || update.selectionSet || update.viewportChanged || refreshRequested) {
+          this.decorations = buildPreviewDecorations(update.view, highlightedTags.current);
+        }
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+}
 
 function moveSelection(view: EditorView, target: number) {
   view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
@@ -153,13 +167,15 @@ const emacsKeymap = [
   },
 ];
 
-export function NoteEditor({ content, onChange }: NoteEditorProps) {
+export function NoteEditor({ content, highlightedTags, onChange }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const applyingExternalValue = useRef(false);
+  const highlightedTagsRef = useRef<readonly string[]>(highlightedTags);
 
   onChangeRef.current = onChange;
+  highlightedTagsRef.current = highlightedTags;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -181,7 +197,7 @@ export function NoteEditor({ content, onChange }: NoteEditorProps) {
           }),
           keymap.of([...emacsKeymap, ...standardKeymap, ...historyKeymap]),
           placeholder("写点什么"),
-          markdownPreviewPlugin,
+          markdownPreviewPlugin(highlightedTagsRef),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !applyingExternalValue.current) {
               onChangeRef.current(update.state.doc.toString());
@@ -206,6 +222,11 @@ export function NoteEditor({ content, onChange }: NoteEditorProps) {
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     applyingExternalValue.current = false;
   }, [content]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view) view.dispatch({ effects: refreshMarkdownPreview.of(undefined) });
+  }, [highlightedTags]);
 
   return <div ref={hostRef} className="note-editor" />;
 }

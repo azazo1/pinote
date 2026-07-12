@@ -28,6 +28,8 @@ pub enum StoreError {
     Database(#[from] sqlx::Error),
     #[error("数据库迁移失败: {0}")]
     Migration(#[from] MigrateError),
+    #[error("标签 JSON 编解码失败: {0}")]
+    TagsJson(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -36,6 +38,8 @@ struct NoteRow {
     title: String,
     markdown: String,
     color: String,
+    group_name: String,
+    tags_json: String,
     revision: i64,
     modified_at: i64,
     modified_by: String,
@@ -104,14 +108,14 @@ impl Store {
         }
 
         let notes = sqlx::query_as::<_, NoteRow>(
-            "SELECT id, title, markdown, color, revision, modified_at, modified_by \
+            "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by \
              FROM notes ORDER BY revision, id",
         )
         .fetch_all(&mut *transaction)
         .await?
         .into_iter()
-        .map(SyncNote::from)
-        .collect();
+        .map(SyncNote::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
         let deleted = sqlx::query_as::<_, TombstoneRow>(
             "SELECT id, revision, deleted_at FROM tombstones ORDER BY revision, id",
         )
@@ -134,9 +138,9 @@ async fn apply_change(
     transaction: &mut Transaction<'_, Sqlite>,
     change: &NoteChange,
     conflicts: &mut Vec<SyncNote>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), StoreError> {
     let current = sqlx::query_as::<_, NoteRow>(
-        "SELECT id, title, markdown, color, revision, modified_at, modified_by \
+        "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by \
          FROM notes WHERE id = ?",
     )
     .bind(&change.id)
@@ -144,18 +148,21 @@ async fn apply_change(
     .await?;
 
     if let Some(current) = current {
-        if current.matches(change) {
+        if current.matches(change)? {
             return Ok(());
         }
         if current.revision == change.base_revision {
             let revision = next_revision(transaction).await?;
+            let tags_json = serde_json::to_string(&change.tags)?;
             sqlx::query(
-                "UPDATE notes SET title = ?, markdown = ?, color = ?, revision = ?, \
-                 modified_at = ?, modified_by = ? WHERE id = ?",
+                "UPDATE notes SET title = ?, markdown = ?, color = ?, group_name = ?, \
+                 tags_json = ?, revision = ?, modified_at = ?, modified_by = ? WHERE id = ?",
             )
             .bind(&change.title)
             .bind(&change.markdown)
             .bind(&change.color)
+            .bind(&change.group_name)
+            .bind(tags_json)
             .bind(revision)
             .bind(change.modified_at)
             .bind(&change.modified_by)
@@ -177,15 +184,18 @@ async fn apply_change(
     .await?;
     if change.base_revision == 0 && tombstone_revision.is_none() {
         let revision = next_revision(transaction).await?;
+        let tags_json = serde_json::to_string(&change.tags)?;
         sqlx::query(
             "INSERT INTO notes \
-             (id, title, markdown, color, revision, modified_at, modified_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&change.id)
         .bind(&change.title)
         .bind(&change.markdown)
         .bind(&change.color)
+        .bind(&change.group_name)
+        .bind(tags_json)
         .bind(revision)
         .bind(change.modified_at)
         .bind(&change.modified_by)
@@ -200,12 +210,14 @@ async fn apply_change(
 async fn insert_or_find_conflict(
     transaction: &mut Transaction<'_, Sqlite>,
     change: &NoteChange,
-) -> Result<SyncNote, sqlx::Error> {
+) -> Result<SyncNote, StoreError> {
     let title = conflict_title(&change.title);
+    let tags_json = serde_json::to_string(&change.tags)?;
     let existing = sqlx::query_as::<_, NoteRow>(
-        "SELECT id, title, markdown, color, revision, modified_at, modified_by FROM notes \
+        "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by FROM notes \
          WHERE conflict_source_id = ? AND conflict_base_revision = ? AND title = ? \
-         AND markdown = ? AND color = ? AND modified_at = ? AND modified_by = ? \
+         AND markdown = ? AND color = ? AND group_name = ? AND tags_json = ? \
+         AND modified_at = ? AND modified_by = ? \
          ORDER BY revision LIMIT 1",
     )
     .bind(&change.id)
@@ -213,26 +225,30 @@ async fn insert_or_find_conflict(
     .bind(&title)
     .bind(&change.markdown)
     .bind(&change.color)
+    .bind(&change.group_name)
+    .bind(&tags_json)
     .bind(change.modified_at)
     .bind(&change.modified_by)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(existing) = existing {
-        return Ok(existing.into());
+        return Ok(existing.try_into()?);
     }
 
     let id = Uuid::new_v4().to_string();
     let revision = next_revision(transaction).await?;
     sqlx::query(
         "INSERT INTO notes \
-         (id, title, markdown, color, revision, modified_at, modified_by, \
+         (id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by, \
           conflict_source_id, conflict_base_revision) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&title)
     .bind(&change.markdown)
     .bind(&change.color)
+    .bind(&change.group_name)
+    .bind(&tags_json)
     .bind(revision)
     .bind(change.modified_at)
     .bind(&change.modified_by)
@@ -246,6 +262,8 @@ async fn insert_or_find_conflict(
         title,
         markdown: change.markdown.clone(),
         color: change.color.clone(),
+        group_name: change.group_name.clone(),
+        tags: change.tags.clone(),
         revision,
         modified_at: change.modified_at,
         modified_by: change.modified_by.clone(),
@@ -311,26 +329,34 @@ fn unix_timestamp_millis() -> i64 {
 }
 
 impl NoteRow {
-    fn matches(&self, change: &NoteChange) -> bool {
-        self.title == change.title
+    fn matches(&self, change: &NoteChange) -> Result<bool, serde_json::Error> {
+        let tags: Vec<String> = serde_json::from_str(&self.tags_json)?;
+        Ok(self.title == change.title
             && self.markdown == change.markdown
             && self.color == change.color
+            && self.group_name == change.group_name
+            && tags == change.tags
             && self.modified_at == change.modified_at
-            && self.modified_by == change.modified_by
+            && self.modified_by == change.modified_by)
     }
 }
 
-impl From<NoteRow> for SyncNote {
-    fn from(value: NoteRow) -> Self {
-        Self {
+impl TryFrom<NoteRow> for SyncNote {
+    type Error = serde_json::Error;
+
+    fn try_from(value: NoteRow) -> Result<Self, Self::Error> {
+        let tags = serde_json::from_str(&value.tags_json)?;
+        Ok(Self {
             id: value.id,
             title: value.title,
             markdown: value.markdown,
             color: value.color,
+            group_name: value.group_name,
+            tags,
             revision: value.revision,
             modified_at: value.modified_at,
             modified_by: value.modified_by,
-        }
+        })
     }
 }
 
@@ -343,4 +369,3 @@ impl From<TombstoneRow> for Tombstone {
         }
     }
 }
-

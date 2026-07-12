@@ -60,8 +60,35 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await window.locator(".title-input").fill("QA 便签");
     const editor = window.locator(".note-editor .cm-content");
-    await editor.fill("# QA\n\n- [ ] item with enough content to wrap onto another line in a compact note\n\n**bold**");
+    await editor.fill("# QA\n\n- [ ] item with enough content to wrap onto another line in a compact note\n\n**bold**\n\nTags #Rust");
+    const flushSucceeded = await app.evaluate(({ BrowserWindow, ipcMain }, url) => new Promise<boolean>((resolve) => {
+      const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      if (!target) {
+        resolve(false);
+        return;
+      }
+      const requestId = `e2e-flush-${Date.now()}`;
+      const timeout = setTimeout(() => {
+        ipcMain.removeListener("note:flush-complete", onComplete);
+        resolve(false);
+      }, 2_000);
+      function onComplete(event: Electron.IpcMainEvent, receivedId: string, succeeded: boolean) {
+        if (event.sender.id !== target.webContents.id || receivedId !== requestId) return;
+        clearTimeout(timeout);
+        ipcMain.removeListener("note:flush-complete", onComplete);
+        resolve(succeeded);
+      }
+      ipcMain.on("note:flush-complete", onComplete);
+      target.webContents.send("note:flush-request", requestId);
+    }), window.url());
+    expect(flushSucceeded).toBe(true);
     await expect(window.locator(".cm-md-heading-1")).toBeVisible();
+    const inlineTag = window.locator(".cm-md-tag").filter({ hasText: "#Rust" });
+    await expect(inlineTag).toBeVisible();
+    await expect(inlineTag).toHaveCSS("font-weight", "620");
+    await expect.poll(() => window.evaluate(async (id) => {
+      return (await window.noteAPI.getNote(id)).note?.tags;
+    }, firstNoteId)).toContain("Rust");
     const taskLine = window.locator(".cm-line").filter({ hasText: "item" });
     await taskLine.click();
     const taskCheckbox = taskLine.locator(".cm-md-task-checkbox");
@@ -91,6 +118,27 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(taskCheckbox).toBeChecked();
     await expect(mainWindow.getByText("QA 便签")).toBeVisible();
     await window.screenshot({ path: "/private/tmp/pinote-expanded.png" });
+
+    await window.getByLabel("分组与标签").click();
+    const metadataPanel = window.locator(".note-metadata-panel");
+    await expect(metadataPanel).toBeVisible();
+    await metadataPanel.getByLabel("便签分组").fill("Work");
+    await metadataPanel.getByLabel("便签分组").press("Enter");
+    await metadataPanel.getByLabel("便签分组").fill("Ignored");
+    await metadataPanel.getByLabel("便签分组").press("Escape");
+    await expect(metadataPanel.getByLabel("便签分组")).toHaveValue("Work");
+    await metadataPanel.getByLabel("添加标签").fill("#Electron");
+    await metadataPanel.getByLabel("添加标签").press("Enter");
+    await expect(metadataPanel.getByText("#Rust", { exact: true })).toBeVisible();
+    await expect(metadataPanel.getByText("#Electron", { exact: true })).toBeVisible();
+    await window.screenshot({ path: "/private/tmp/pinote-metadata-panel.png" });
+    await metadataPanel.getByLabel("关闭分组与标签").click();
+    await expect.poll(() => window.evaluate(async (id) => {
+      const note = (await window.noteAPI.getNote(id)).note;
+      return note ? { groupName: note.groupName, tags: note.tags } : null;
+    }, firstNoteId)).toMatchObject({ groupName: "Work", tags: expect.arrayContaining(["Electron", "Rust"]) });
+    await expect(mainWindow.locator(".main-note-group")).toHaveText("Work");
+    await expect(mainWindow.locator(".main-note-tag")).toHaveCount(2);
 
     await window.getByLabel("置顶").click();
     await expect(window.getByLabel("置顶")).toHaveClass(/is-active/);
@@ -125,6 +173,20 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
     }, secondWindow.url())).toBe(true);
+
+    const search = mainWindow.getByLabel("搜索便签");
+    await search.fill("#Rust");
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await search.fill("");
+    await mainWindow.getByRole("button", { name: /Work 1/ }).click();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await mainWindow.locator(".main-tag-filter").filter({ hasText: "Rust" }).click();
+    await mainWindow.locator(".main-tag-filter").filter({ hasText: "Electron" }).click();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await mainWindow.getByRole("button", { name: /全部 2/ }).click();
+    await mainWindow.getByRole("button", { name: "清除", exact: true }).click();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
+    await mainWindow.screenshot({ path: "/private/tmp/pinote-main-metadata.png" });
 
     const snapFixture = await app.evaluate(({ BrowserWindow, screen }, input) => {
       const first = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.firstUrl);
@@ -296,6 +358,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => readWindowVisible(window.url())).toBe(true);
 
     await window.evaluate(() => window.noteAPI.hideGroup());
+    await mainWindow.bringToFront();
     await mainWindow.mouse.move(40, 120);
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 2_000 }).toBe(36);
     await expect.poll(() => readWindowVisible(window.url())).toBe(false);

@@ -36,6 +36,15 @@ interface MainNoteRowProps {
 function MainNoteRow({ note, deleting, onOpen, onDelete }: MainNoteRowProps) {
   const palette = noteColors[note.color as keyof typeof noteColors] ?? noteColors.lemon;
   const excerpt = useMemo(() => markdownExcerpt(note.markdown), [note.markdown]);
+  const groupName = note.groupName.trim();
+  const tags = useMemo(() => {
+    const uniqueTags = new Map<string, string>();
+    for (const rawTag of note.tags) {
+      const tag = rawTag.trim();
+      if (tag) uniqueTags.set(tag.toLowerCase(), tag);
+    }
+    return [...uniqueTags.values()];
+  }, [note.tags]);
 
   return (
     <article className="main-note-row" role="listitem">
@@ -52,6 +61,16 @@ function MainNoteRow({ note, deleting, onOpen, onDelete }: MainNoteRowProps) {
             {note.open && <span className="main-note-open-state" title="窗口已打开" aria-label="窗口已打开" />}
           </span>
           <span className={`main-note-excerpt${excerpt ? "" : " is-empty"}`}>{excerpt || "空白便签"}</span>
+          {(groupName || tags.length > 0) && (
+            <span className="main-note-meta">
+              {groupName && <span className="main-note-group" title={groupName}>{groupName}</span>}
+              {tags.map((tag) => (
+                <span className="main-note-tag" title={tag} key={tag.toLowerCase()}>
+                  {tag.startsWith("#") ? tag : `#${tag}`}
+                </span>
+              ))}
+            </span>
+          )}
         </span>
         <time dateTime={new Date(note.modifiedAt).toISOString()}>{modifiedLabel(note.modifiedAt)}</time>
       </button>

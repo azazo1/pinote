@@ -1,4 +1,4 @@
-import { Cloud, Plus, Search, StickyNote, X } from "lucide-react";
+import { Cloud, Folder, Hash, Plus, Search, StickyNote, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { MainNoteList } from "./components/MainNoteList";
 import { SyncPanel } from "./components/SyncPanel";
@@ -9,6 +9,8 @@ const noteAPI = window.noteAPI;
 export default function MainApp() {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [query, setQuery] = useState("");
+  const [groupFilter, setGroupFilter] = useState<string | null>(null);
+  const [tagFilters, setTagFilters] = useState<string[]>([]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
   const [creating, setCreating] = useState(false);
@@ -26,15 +28,72 @@ export default function MainApp() {
     };
   }, []);
 
+  const groupOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const note of notes) {
+      const name = note.groupName.trim();
+      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  }, [notes]);
+
+  const tagOptions = useMemo(() => {
+    const labels = new Map<string, { label: string; count: number }>();
+    for (const note of notes) {
+      const noteTags = new Map<string, string>();
+      for (const rawTag of note.tags) {
+        const label = rawTag.trim();
+        if (label) noteTags.set(label.toLowerCase(), label);
+      }
+      for (const [key, label] of noteTags) {
+        const current = labels.get(key);
+        labels.set(key, { label: current?.label ?? label, count: (current?.count ?? 0) + 1 });
+      }
+    }
+    return [...labels.entries()]
+      .map(([key, value]) => ({ key, ...value }))
+      .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+  }, [notes]);
+
+  useEffect(() => {
+    if (groupFilter !== null && groupFilter !== "" && !groupOptions.some((group) => group.name === groupFilter)) {
+      setGroupFilter(null);
+    }
+  }, [groupFilter, groupOptions]);
+
+  useEffect(() => {
+    const availableTags = new Set(tagOptions.map((tag) => tag.key));
+    setTagFilters((current) => {
+      const next = current.filter((tag) => availableTags.has(tag));
+      return next.length === current.length ? current : next;
+    });
+  }, [tagOptions]);
+
   const visibleNotes = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
+    const normalized = query.trim().toLowerCase();
     return notes
-      .filter((note) => !normalized
-        || note.title.toLocaleLowerCase().includes(normalized)
-        || note.markdown.toLocaleLowerCase().includes(normalized))
+      .filter((note) => {
+        const groupName = note.groupName.trim();
+        if (groupFilter !== null && groupName !== groupFilter) return false;
+
+        const noteTags = note.tags
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+          .map((tag) => tag.toLowerCase());
+        const noteTagSet = new Set(noteTags);
+        if (tagFilters.some((tag) => !noteTagSet.has(tag))) return false;
+
+        return !normalized
+          || note.title.toLowerCase().includes(normalized)
+          || note.markdown.toLowerCase().includes(normalized)
+          || groupName.toLowerCase().includes(normalized)
+          || noteTags.some((tag) => tag.includes(normalized) || `#${tag}`.includes(normalized));
+      })
       .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
         || right.modifiedAt - left.modifiedAt);
-  }, [notes, query]);
+  }, [groupFilter, notes, query, tagFilters]);
 
   async function createNote() {
     if (creating) return;
@@ -72,7 +131,21 @@ export default function MainApp() {
     }
   }
 
+  const ungroupedCount = notes.filter((note) => !note.groupName.trim()).length;
+  const hasActiveFilters = Boolean(query.trim()) || groupFilter !== null || tagFilters.length > 0;
   const noMatches = notes.length > 0 && visibleNotes.length === 0;
+
+  function toggleTag(tag: string) {
+    setTagFilters((current) => current.includes(tag)
+      ? current.filter((value) => value !== tag)
+      : [...current, tag]);
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setGroupFilter(null);
+    setTagFilters([]);
+  }
 
   return (
     <main className="main-shell">
@@ -101,27 +174,84 @@ export default function MainApp() {
       </header>
 
       <section className="main-toolbar" aria-label="便签工具栏">
-        <label className="main-search">
-          <Search size={16} aria-hidden="true" />
-          <input
-            type="search"
-            value={query}
-            placeholder="搜索标题或内容"
-            aria-label="搜索便签"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setQuery("");
-            }}
-          />
-          {query && (
-            <button type="button" aria-label="清除搜索" title="清除搜索" onClick={() => setQuery("")}>
-              <X size={14} />
+        <div className="main-toolbar-primary">
+          <label className="main-search">
+            <Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              placeholder="搜索标题, 内容, 分组或标签"
+              aria-label="搜索便签"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setQuery("");
+              }}
+            />
+            {query && (
+              <button type="button" aria-label="清除搜索" title="清除搜索" onClick={() => setQuery("")}>
+                <X size={14} />
+              </button>
+            )}
+          </label>
+          <span className="main-result-count" aria-live="polite">
+            {hasActiveFilters ? `${visibleNotes.length} 个结果` : `${notes.length} 张便签`}
+          </span>
+        </div>
+
+        <div className="main-filter-row" aria-label="按分组筛选">
+          <span className="main-filter-kind" title="分组"><Folder size={13} aria-hidden="true" /></span>
+          <div className="main-filter-scroll" role="group" aria-label="便签分组">
+            <button
+              className="main-group-filter"
+              type="button"
+              aria-pressed={groupFilter === null}
+              onClick={() => setGroupFilter(null)}
+            >
+              全部 <span>{notes.length}</span>
             </button>
-          )}
-        </label>
-        <span className="main-result-count" aria-live="polite">
-          {query ? `${visibleNotes.length} 个结果` : `${notes.length} 张便签`}
-        </span>
+            <button
+              className="main-group-filter"
+              type="button"
+              aria-pressed={groupFilter === ""}
+              onClick={() => setGroupFilter("")}
+            >
+              未分组 <span>{ungroupedCount}</span>
+            </button>
+            {groupOptions.map((group) => (
+              <button
+                className="main-group-filter"
+                type="button"
+                key={group.name}
+                aria-pressed={groupFilter === group.name}
+                onClick={() => setGroupFilter(group.name)}
+              >
+                {group.name} <span>{group.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {tagOptions.length > 0 && (
+          <div className="main-filter-row" aria-label="按标签筛选">
+            <span className="main-filter-kind" title="标签"><Hash size={13} aria-hidden="true" /></span>
+            <div className="main-filter-scroll" role="group" aria-label="便签标签">
+              {tagOptions.map((tag) => (
+                <button
+                  className="main-tag-filter"
+                  type="button"
+                  key={tag.key}
+                  aria-pressed={tagFilters.includes(tag.key)}
+                  onClick={() => toggleTag(tag.key)}
+                >
+                  {tag.label} <span>{tag.count}</span>
+                </button>
+              ))}
+            </div>
+            {tagFilters.length > 0 && (
+              <button className="main-filter-clear" type="button" onClick={() => setTagFilters([])}>清除</button>
+            )}
+          </div>
+        )}
       </section>
 
       {syncOpen && <SyncPanel status={syncStatus} onClose={() => setSyncOpen(false)} onStatus={setSyncStatus} />}
@@ -141,7 +271,7 @@ export default function MainApp() {
             <StickyNote size={28} strokeWidth={1.5} aria-hidden="true" />
             <strong>{noMatches ? "没有匹配的便签" : "还没有便签"}</strong>
             {noMatches ? (
-              <button type="button" className="main-empty-command" onClick={() => setQuery("")}>清除搜索</button>
+              <button type="button" className="main-empty-command" onClick={clearFilters}>清除筛选</button>
             ) : (
               <button type="button" className="main-empty-command" onClick={() => void createNote()}>新建便签</button>
             )}

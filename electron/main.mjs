@@ -58,14 +58,27 @@ app.on("before-quit", (event) => {
   quitStarted = true;
   windows?.prepareToQuit();
   void (async () => {
+    let completed = false;
     try {
+      let flushed = windows ? await windows.flushPendingNotes() : true;
+      if (!flushed && windows) flushed = await windows.flushPendingNotes();
+      if (!flushed) throw new Error("仍有便签内容未保存");
       await sync?.stop();
       await store?.save();
+      completed = true;
     } catch (error) {
       log.error("退出前保存失败", error);
+      dialog.showErrorBox("Pinote 无法退出", "仍有便签内容未保存, 请稍后重试.");
     } finally {
-      quitReady = true;
-      app.quit();
+      if (completed) {
+        quitReady = true;
+        app.quit();
+      } else {
+        quitStarted = false;
+        windows?.cancelQuit();
+        if (sync?.stopped) sync.initialize();
+        windows?.openMainWindow();
+      }
     }
   })();
 });
@@ -81,8 +94,8 @@ function registerIpc() {
     group: windows.getGroupState(),
     capabilities: windows.getCapabilities(),
   }));
-  ipcMain.handle("note:update", (_event, id, patch) => {
-    const note = store.updateContent(validId(id), sanitizePatch(patch));
+  ipcMain.handle("note:update", (_event, id, patch, baseRevision) => {
+    const note = store.updateContent(validId(id), sanitizePatch(patch), validBaseRevision(baseRevision));
     windows.broadcastNoteList();
     sync.schedule();
     return note;
@@ -93,6 +106,9 @@ function registerIpc() {
     return note;
   });
   ipcMain.handle("note:open", (_event, id) => windows.openNote(validId(id)));
+  ipcMain.on("note:flush-complete", (event, requestId, succeeded) => {
+    windows.completePendingNoteFlush(event.sender.id, requestId, succeeded);
+  });
   ipcMain.handle("note:close", (_event, id) => windows.closeNote(validId(id)));
   ipcMain.handle("note:delete", async (event, id) => {
     id = validId(id);
@@ -225,13 +241,38 @@ function trayIcon(iconPath) {
 function sanitizePatch(patch) {
   if (!patch || typeof patch !== "object") return {};
   const safe = {};
-  if (typeof patch.title === "string") safe.title = patch.title.slice(0, 200);
+  if (typeof patch.title === "string") safe.title = truncateCodePoints(patch.title, 200);
   if (typeof patch.markdown === "string") safe.markdown = patch.markdown.slice(0, 2_000_000);
   if (typeof patch.color === "string") safe.color = patch.color.slice(0, 32);
+  if (typeof patch.groupName === "string") safe.groupName = truncateCodePoints(patch.groupName.trim(), 80).trim();
+  if (Array.isArray(patch.tags)) safe.tags = sanitizeTags(patch.tags);
   return safe;
+}
+
+function sanitizeTags(values) {
+  const tags = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const tag = truncateCodePoints(value.trim().replace(/^#+/, "").trim(), 40).trim();
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length === 16) break;
+  }
+  return tags;
+}
+
+function truncateCodePoints(value, length) {
+  return Array.from(value).slice(0, length).join("");
 }
 
 function validId(value) {
   if (typeof value !== "string" || value.length === 0 || value.length > 128) throw new Error("便签 id 无效");
   return value;
+}
+
+function validBaseRevision(value) {
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
 }

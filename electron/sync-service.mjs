@@ -2,6 +2,7 @@ import { safeStorage } from "electron";
 import log from "electron-log/main.js";
 
 const NORMAL_INTERVAL_MS = 15_000;
+const CHANGE_DELAY_MS = 750;
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 60_000, 300_000];
 
 export class SyncService {
@@ -98,7 +99,7 @@ export class SyncService {
   schedule() {
     if (this.stopped || !this.isConfigured()) return;
     clearTimeout(this.pendingTimer);
-    this.pendingTimer = setTimeout(() => void this.syncNow().catch(() => {}), 750);
+    this.pendingTimer = setTimeout(() => void this.syncNow().catch(() => {}), CHANGE_DELAY_MS);
   }
 
   syncNow() {
@@ -136,11 +137,17 @@ export class SyncService {
       });
       if (!response.ok) throw new Error(`服务器返回 ${response.status}`);
       const snapshot = await response.json();
+      clearTimeout(timeout);
       if (this.stopped) return this.status;
-      const result = this.store.applySyncResponse(snapshot);
+      const flushed = await this.windows.flushPendingNotes();
+      if (!flushed) throw new Error("等待本地便签保存超时");
+      if (this.stopped) return this.status;
+      const result = this.store.applySyncResponse(snapshot, request);
       this.windows.reconcileRemoteState();
       this.retryIndex = 0;
-      this.scheduleNext(NORMAL_INTERVAL_MS);
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = null;
+      this.scheduleNext(result.pending ? CHANGE_DELAY_MS : NORMAL_INTERVAL_MS);
       const status = {
         state: "synced",
         message: result.conflicts.length > 0 ? `同步完成, 已保留 ${result.conflicts.length} 个冲突副本` : "同步完成",

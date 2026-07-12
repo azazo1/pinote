@@ -3,6 +3,8 @@ export interface Note {
   title: string;
   markdown: string;
   color: string;
+  groupName: string;
+  tags: string[];
   revision: number;
   modifiedAt: number;
   modifiedBy: string;
@@ -18,6 +20,8 @@ export interface NoteSummary {
   title: string;
   markdown: string;
   color: string;
+  groupName: string;
+  tags: string[];
   modifiedAt: number;
   open: boolean;
   pinned: boolean;
@@ -44,7 +48,11 @@ export interface PlatformCapabilities {
 
 export interface NoteAPI {
   getNote: (id: string) => Promise<{ note: Note | null; group: GroupState; capabilities: PlatformCapabilities }>;
-  updateNote: (id: string, patch: Pick<Partial<Note>, "title" | "markdown" | "color">) => Promise<Note | null>;
+  updateNote: (
+    id: string,
+    patch: Pick<Partial<Note>, "title" | "markdown" | "color" | "groupName" | "tags">,
+    baseRevision?: number,
+  ) => Promise<Note | null>;
   createNote: () => Promise<Note>;
   closeNote: (id: string) => Promise<boolean>;
   openNote: (id: string) => Promise<Note | null>;
@@ -69,6 +77,7 @@ export interface NoteAPI {
   onGroupState: (callback: (state: GroupState) => void) => () => void;
   onCommand: (callback: (command: string) => void) => () => void;
   onRemoteNote: (callback: (note: Note) => void) => () => void;
+  onFlushRequested: (callback: () => Promise<void>) => () => void;
   onSyncStatus: (callback: (status: SyncStatus) => void) => () => void;
   onNoteList: (callback: (notes: NoteSummary[]) => void) => () => void;
   onShelfExpanded: (callback: (expanded: boolean) => void) => () => void;

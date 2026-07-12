@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
+import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
 import { snapBounds } from "./windowing/snap-bounds.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,9 @@ export class WindowManager {
     this.shelfPositionSaveTimer = null;
     this.animations = new Map();
     this.animatingWindows = new Set();
+    this.rendererFlush = new RendererFlushCoordinator(1_200, (pending) => {
+      log.warn("等待便签保存超时", { pending });
+    });
     this.wayland = isWaylandSession();
     this.trayAvailable = false;
     this.quitting = false;
@@ -41,6 +45,32 @@ export class WindowManager {
 
   getCapabilities() {
     return { platform: process.platform, wayland: this.wayland };
+  }
+
+  flushPendingNotes() {
+    const targets = new Map(
+      [...this.windows.values()]
+        .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+        .map((window) => [window.webContents.id, window.webContents]),
+    );
+    return this.rendererFlush.request([...targets.keys()], (targetId, requestId) => {
+      const webContents = targets.get(targetId);
+      if (!webContents || webContents.isDestroyed()) {
+        this.rendererFlush.complete(requestId, targetId);
+        return;
+      }
+      try {
+        webContents.send("note:flush-request", requestId);
+      } catch (error) {
+        log.warn("请求便签保存失败", { targetId, message: error instanceof Error ? error.message : "未知错误" });
+        this.rendererFlush.complete(requestId, targetId, false);
+      }
+    });
+  }
+
+  completePendingNoteFlush(webContentsId, requestId, succeeded) {
+    if (!Number.isInteger(webContentsId) || typeof requestId !== "string") return false;
+    return this.rendererFlush.complete(requestId, webContentsId, succeeded === true);
   }
 
   getDockMode() {
@@ -66,6 +96,10 @@ export class WindowManager {
     this.cancelHideGroup();
     clearTimeout(this.shelfPositionSaveTimer);
     this.shelfPositionSaveTimer = null;
+  }
+
+  cancelQuit() {
+    this.quitting = false;
   }
 
   shouldOpenMainWindowOnActivate() {

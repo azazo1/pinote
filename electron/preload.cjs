@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("noteAPI", {
   getNote: (id) => ipcRenderer.invoke("note:get", id),
-  updateNote: (id, patch) => ipcRenderer.invoke("note:update", id, patch),
+  updateNote: (id, patch, baseRevision) => ipcRenderer.invoke("note:update", id, patch, baseRevision),
   createNote: () => ipcRenderer.invoke("note:create"),
   openNote: (id) => ipcRenderer.invoke("note:open", id),
   closeNote: (id) => ipcRenderer.invoke("note:close", id),
@@ -42,6 +42,20 @@ contextBridge.exposeInMainWorld("noteAPI", {
     const listener = (_event, note) => callback(note);
     ipcRenderer.on("note:remote", listener);
     return () => ipcRenderer.removeListener("note:remote", listener);
+  },
+  onFlushRequested: (callback) => {
+    const listener = async (_event, requestId) => {
+      let succeeded = false;
+      try {
+        await callback();
+        succeeded = true;
+      } catch {
+        succeeded = false;
+      }
+      ipcRenderer.send("note:flush-complete", requestId, succeeded);
+    };
+    ipcRenderer.on("note:flush-request", listener);
+    return () => ipcRenderer.removeListener("note:flush-request", listener);
   },
   onSyncStatus: (callback) => {
     const listener = (_event, status) => callback(status);

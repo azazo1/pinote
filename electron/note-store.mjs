@@ -3,9 +3,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
 
-const CURRENT_VERSION = 5;
+const CURRENT_VERSION = 6;
 const DEFAULT_COLOR = "lemon";
 const DEFAULT_SHELF_POSITION = 0.5;
+const MAX_GROUP_NAME_LENGTH = 80;
+const MAX_TAG_COUNT = 16;
+const MAX_TAG_LENGTH = 40;
 const DOCK_STATES = new Set(["free", "shelf", "inline"]);
 
 export class NoteStore {
@@ -58,6 +61,8 @@ export class NoteStore {
         title: note.title,
         markdown: note.markdown,
         color: note.color,
+        groupName: note.groupName,
+        tags: note.tags,
         modifiedAt: note.modifiedAt,
         open: this.getWindowState(note.id).open,
         pinned: this.getWindowState(note.id).pinned,
@@ -94,6 +99,8 @@ export class NoteStore {
       title: "新便签",
       markdown: "",
       color: DEFAULT_COLOR,
+      groupName: "",
+      tags: [],
       revision: 0,
       modifiedAt: now,
       modifiedBy: this.state.deviceId,
@@ -111,18 +118,30 @@ export class NoteStore {
     return this.getRenderableNote(note.id);
   }
 
-  updateContent(id, patch) {
+  updateContent(id, patch, baseRevision) {
     const note = this.getNote(id);
     if (!note) return null;
+    const expectedRevision = Number.isInteger(baseRevision) && baseRevision >= 0 ? baseRevision : note.revision;
     const next = {
-      title: typeof patch.title === "string" ? patch.title.slice(0, 200) : note.title,
+      title: typeof patch.title === "string" ? truncateCodePoints(patch.title, 200) : note.title,
       markdown: typeof patch.markdown === "string" ? patch.markdown.slice(0, 2_000_000) : note.markdown,
       color: typeof patch.color === "string" ? patch.color.slice(0, 32) : note.color,
+      groupName: typeof patch.groupName === "string" ? normalizeGroupName(patch.groupName) : note.groupName,
+      tags: Array.isArray(patch.tags) ? normalizeTags(patch.tags) : note.tags,
     };
-    if (next.title === note.title && next.markdown === note.markdown && next.color === note.color) return this.getRenderableNote(id);
+    if (
+      next.title === note.title &&
+      next.markdown === note.markdown &&
+      next.color === note.color &&
+      next.groupName === note.groupName &&
+      equalStringArrays(next.tags, note.tags)
+    ) return this.getRenderableNote(id);
     note.title = next.title;
     note.markdown = next.markdown;
     note.color = next.color;
+    note.groupName = next.groupName;
+    note.tags = next.tags;
+    note.revision = Math.min(note.revision, expectedRevision);
     note.modifiedAt = Date.now();
     note.modifiedBy = this.state.deviceId;
     note.dirty = true;
@@ -189,6 +208,8 @@ export class NoteStore {
         title: note.title,
         markdown: note.markdown,
         color: note.color,
+        groupName: note.groupName,
+        tags: [...note.tags],
         baseRevision: note.revision,
         modifiedAt: note.modifiedAt,
         modifiedBy: note.modifiedBy,
@@ -197,40 +218,72 @@ export class NoteStore {
     };
   }
 
-  applySyncResponse(snapshot) {
+  applySyncResponse(snapshot, request = {}) {
     if (!Array.isArray(snapshot?.notes) || !Array.isArray(snapshot?.deleted)) throw new Error("同步响应格式无效");
-    const previous = new Map(this.state.notes.map((note) => [note.id, note]));
-    const remoteNotes = snapshot.notes.filter(isRemoteNote);
-    const remoteDeleted = snapshot.deleted.filter(isRemoteDeletion);
-    const deletedIds = new Set(remoteDeleted.map((item) => item.id));
-    const activeIds = new Set(remoteNotes.map((item) => item.id));
+    const localNotes = new Map(this.state.notes.map((note) => [note.id, note]));
+    const localDeleted = new Map(this.state.deleted.map((item) => [item.id, item]));
+    const sentChanges = new Map((Array.isArray(request.changes) ? request.changes : []).map((change) => [change.id, change]));
+    const sentDeletions = new Map((Array.isArray(request.deletions) ? request.deletions : []).map((item) => [item.id, item]));
+    const remoteNotes = new Map(snapshot.notes.filter(isRemoteNote).map((note) => [note.id, note]));
+    const remoteDeleted = new Map(snapshot.deleted.filter(isRemoteDeletion).map((item) => [item.id, item]));
     const nextNotes = [];
+    const nextDeleted = [];
+    const suppressedRemoteIds = new Set();
 
-    for (const remote of remoteNotes) {
-      const local = previous.get(remote.id);
-      nextNotes.push(normalizeContentNote({
-        ...remote,
-        dirty: false,
-      }, this.state.deviceId));
-      if (!local && !this.state.windows[remote.id]) this.state.windows[remote.id] = createWindowState({ open: false });
-      previous.delete(remote.id);
+    for (const local of localDeleted.values()) {
+      if (remoteDeleted.has(local.id)) continue;
+      const remote = remoteNotes.get(local.id);
+      const sentDeletion = sentDeletions.get(local.id);
+      if (sentDeletion && deletionMatchesChange(local, sentDeletion)) continue;
+
+      let retained = local;
+      const sentChange = sentChanges.get(local.id);
+      if (remote && sentChange && remoteMatchesChange(remote, sentChange)) {
+        retained = { ...local, baseRevision: remote.revision };
+      }
+      if (retained.dirty) nextDeleted.push(retained);
+      suppressedRemoteIds.add(local.id);
     }
 
-    for (const [id, local] of previous) {
-      if (local.dirty && !deletedIds.has(id)) nextNotes.push(local);
-      else delete this.state.windows[id];
+    for (const local of localNotes.values()) {
+      const remote = remoteNotes.get(local.id);
+      const sentChange = sentChanges.get(local.id);
+      const sentVersionUnchanged = local.dirty && sentChange && contentMatchesChange(local, sentChange);
+
+      if (local.dirty && !sentVersionUnchanged) {
+        const retained = remote && sentChange && remoteMatchesChange(remote, sentChange)
+          ? { ...local, revision: remote.revision }
+          : local;
+        nextNotes.push(retained);
+        suppressedRemoteIds.add(local.id);
+        continue;
+      }
+
+      if (remote) {
+        nextNotes.push(normalizeContentNote({ ...remote, dirty: false }, this.state.deviceId));
+      } else if (!remoteDeleted.has(local.id) && local.dirty) {
+        nextNotes.push(local);
+      }
+    }
+
+    const retainedNoteIds = new Set(nextNotes.map((note) => note.id));
+    for (const remote of remoteNotes.values()) {
+      if (retainedNoteIds.has(remote.id) || suppressedRemoteIds.has(remote.id)) continue;
+      nextNotes.push(normalizeContentNote({ ...remote, dirty: false }, this.state.deviceId));
+      if (!this.state.windows[remote.id]) this.state.windows[remote.id] = createWindowState({ open: false });
     }
 
     this.state.notes = nextNotes;
-    this.state.deleted = this.state.deleted.filter((local) => {
-      if (deletedIds.has(local.id)) return false;
-      if (activeIds.has(local.id)) return false;
-      return local.dirty;
-    });
+    this.state.deleted = nextDeleted;
+    const activeIds = new Set(nextNotes.map((note) => note.id));
+    for (const id of Object.keys(this.state.windows)) {
+      if (!activeIds.has(id)) delete this.state.windows[id];
+    }
     void this.save();
     return {
       conflicts: Array.isArray(snapshot.conflicts) ? snapshot.conflicts.filter(isRemoteNote).map((note) => note.id) : [],
       notes: this.state.notes.length,
+      pending: this.state.notes.some((note) => note.dirty) || this.state.deleted.some((item) => item.dirty),
     };
   }
 
@@ -302,6 +355,8 @@ function normalizeContentNote(note, deviceId) {
     title: typeof note.title === "string" ? note.title : "新便签",
     markdown: typeof note.markdown === "string" ? note.markdown : "",
     color: typeof note.color === "string" ? note.color : DEFAULT_COLOR,
+    groupName: normalizeGroupName(note.groupName),
+    tags: normalizeTags(note.tags),
     revision: Number.isInteger(note.revision) && note.revision >= 0 ? note.revision : 0,
     modifiedAt: Number.isFinite(note.modifiedAt) ? note.modifiedAt : Number.isFinite(note.updatedAt) ? note.updatedAt : Date.now(),
     modifiedBy: typeof note.modifiedBy === "string" ? note.modifiedBy : deviceId,
@@ -365,6 +420,65 @@ function clamp(value, min, max, fallback) {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 }
 
+function normalizeGroupName(value) {
+  if (typeof value !== "string") return "";
+  return truncateCodePoints(value.trim(), MAX_GROUP_NAME_LENGTH).trim();
+}
+
+function normalizeTags(value) {
+  if (!Array.isArray(value)) return [];
+  const tags = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const tag = truncateCodePoints(item.trim().replace(/^#+/, "").trim(), MAX_TAG_LENGTH).trim();
+    if (tag.length === 0) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length === MAX_TAG_COUNT) break;
+  }
+  return tags;
+}
+
+function truncateCodePoints(value, length) {
+  return Array.from(value).slice(0, length).join("");
+}
+
+function equalStringArrays(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function contentMatchesChange(note, change) {
+  return note.id === change.id &&
+    note.title === change.title &&
+    note.markdown === change.markdown &&
+    note.color === change.color &&
+    note.groupName === change.groupName &&
+    equalStringArrays(note.tags, change.tags) &&
+    note.revision === change.baseRevision &&
+    note.modifiedAt === change.modifiedAt &&
+    note.modifiedBy === change.modifiedBy;
+}
+
+function remoteMatchesChange(note, change) {
+  return note.id === change.id &&
+    note.title === change.title &&
+    note.markdown === change.markdown &&
+    note.color === change.color &&
+    note.groupName === change.groupName &&
+    equalStringArrays(note.tags, change.tags) &&
+    note.modifiedAt === change.modifiedAt &&
+    note.modifiedBy === change.modifiedBy;
+}
+
+function deletionMatchesChange(deletion, change) {
+  return deletion.id === change.id &&
+    deletion.baseRevision === change.baseRevision &&
+    deletion.deletedAt === change.deletedAt;
+}
+
 function isLocalDeletion(value) {
   return Boolean(value && typeof value.id === "string" && Number.isInteger(value.baseRevision) && Number.isFinite(value.deletedAt));
 }
@@ -380,6 +494,9 @@ function isRemoteNote(value) {
     typeof value.title === "string" &&
     typeof value.markdown === "string" &&
     typeof value.color === "string" &&
+    typeof value.groupName === "string" &&
+    Array.isArray(value.tags) &&
+    value.tags.every((tag) => typeof tag === "string") &&
     Number.isInteger(value.revision) &&
     Number.isFinite(value.modifiedAt) &&
     typeof value.modifiedBy === "string",

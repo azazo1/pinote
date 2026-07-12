@@ -115,7 +115,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(5);
+    expect(restored.state.version).toBe(6);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -164,12 +164,13 @@ describe("NoteStore", () => {
     const store = testStore();
     await store.load();
     const local = store.createNote();
+    const request = store.buildSyncRequest();
 
     store.applySyncResponse({
       notes: [{ ...local, revision: 1, dirty: undefined }],
       deleted: [],
       conflicts: [],
-    });
+    }, request);
 
     expect(store.getNote(local.id)).toMatchObject({ revision: 1, dirty: false });
     await store.save();
@@ -180,16 +181,143 @@ describe("NoteStore", () => {
     await store.load();
     const local = store.createNote();
     store.deleteNote(local.id);
+    const request = store.buildSyncRequest();
 
     store.applySyncResponse({
       notes: [{ ...local, revision: 2, dirty: undefined }],
       deleted: [],
       conflicts: [],
-    });
+    }, request);
 
     expect(store.getNote(local.id)).toMatchObject({ revision: 2, dirty: false });
     expect(store.getWindowState(local.id).open).toBe(false);
     expect(store.state.deleted).toEqual([]);
+    await store.save();
+  });
+
+  it("keeps an edit made while its previous version is syncing", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { title: "发送版本", markdown: "第一版" });
+    const request = store.buildSyncRequest();
+    store.updateContent(note.id, { title: "本地新版本", markdown: "第二版" });
+
+    const sent = request.changes[0];
+    const result = store.applySyncResponse({
+      notes: [{ ...sent, revision: 1 }],
+      deleted: [],
+      conflicts: [],
+    }, request);
+
+    expect(store.getNote(note.id)).toMatchObject({
+      title: "本地新版本",
+      markdown: "第二版",
+      revision: 1,
+      dirty: true,
+    });
+    expect(store.buildSyncRequest().changes[0].baseRevision).toBe(1);
+    expect(result.pending).toBe(true);
+    await store.save();
+  });
+
+  it("keeps the renderer edit base when a remote revision arrives first", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    const createRequest = store.buildSyncRequest();
+    store.applySyncResponse({
+      notes: [{ ...createRequest.changes[0], revision: 1 }],
+      deleted: [],
+      conflicts: [],
+    }, createRequest);
+    const current = store.getNote(note.id);
+    const remote = {
+      ...current,
+      markdown: "远端版本",
+      revision: 2,
+      modifiedAt: current.modifiedAt + 1,
+      modifiedBy: "remote-device",
+      dirty: undefined,
+    };
+    store.applySyncResponse({ notes: [remote], deleted: [], conflicts: [] }, store.buildSyncRequest());
+
+    store.updateContent(note.id, { markdown: "本地待保存版本" }, 1);
+
+    expect(store.getNote(note.id)).toMatchObject({
+      markdown: "本地待保存版本",
+      revision: 1,
+      dirty: true,
+    });
+    expect(store.buildSyncRequest().changes[0].baseRevision).toBe(1);
+    await store.save();
+  });
+
+  it("keeps and rebases a deletion made while content is syncing", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { markdown: "即将删除" });
+    const contentRequest = store.buildSyncRequest();
+    store.deleteNote(note.id);
+
+    const sent = contentRequest.changes[0];
+    const firstResult = store.applySyncResponse({
+      notes: [{ ...sent, revision: 1 }],
+      deleted: [],
+      conflicts: [],
+    }, contentRequest);
+
+    expect(store.getNote(note.id)).toBeNull();
+    expect(store.state.deleted).toEqual([
+      expect.objectContaining({ id: note.id, baseRevision: 1, dirty: true }),
+    ]);
+    expect(firstResult.pending).toBe(true);
+
+    const deletionRequest = store.buildSyncRequest();
+    const secondResult = store.applySyncResponse({
+      notes: [],
+      deleted: [{ id: note.id, revision: 2, deletedAt: Date.now() }],
+      conflicts: [],
+    }, deletionRequest);
+
+    expect(store.getNote(note.id)).toBeNull();
+    expect(store.state.deleted).toEqual([]);
+    expect(secondResult.pending).toBe(false);
+    await store.save();
+  });
+
+  it("acknowledges a deletion created after the request when the server already has a tombstone", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    const request = store.buildSyncRequest();
+    store.deleteNote(note.id);
+
+    const result = store.applySyncResponse({
+      notes: [],
+      deleted: [{ id: note.id, revision: 1, deletedAt: Date.now() }],
+      conflicts: [],
+    }, request);
+
+    expect(store.getNote(note.id)).toBeNull();
+    expect(store.state.deleted).toEqual([]);
+    expect(result.pending).toBe(false);
+    await store.save();
+  });
+
+  it("acknowledges a sent deletion when the server already has no note", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.deleteNote(note.id);
+    const request = store.buildSyncRequest();
+
+    const result = store.applySyncResponse({ notes: [], deleted: [], conflicts: [] }, request);
+
+    expect(store.getNote(note.id)).toBeNull();
+    expect(store.state.deleted).toEqual([]);
+    expect(result.pending).toBe(false);
     await store.save();
   });
 
@@ -201,15 +329,69 @@ describe("NoteStore", () => {
       title: "远端便签",
       markdown: "内容",
       color: "lemon",
+      groupName: "工作",
+      tags: ["同步"],
       revision: 1,
       modifiedAt: Date.now(),
       modifiedBy: "remote-device",
     };
+    const invalidMetadata = { ...remote, id: randomUUID(), groupName: undefined };
 
-    store.applySyncResponse({ notes: [remote], deleted: [], conflicts: [] });
+    store.applySyncResponse({ notes: [remote, invalidMetadata], deleted: [], conflicts: [] });
 
-    expect(store.getNote(remote.id)).toMatchObject({ id: remote.id, dirty: false });
+    expect(store.getNote(remote.id)).toMatchObject({
+      id: remote.id,
+      groupName: "工作",
+      tags: ["同步"],
+      dirty: false,
+    });
+    expect(store.getNote(invalidMetadata.id)).toBeNull();
     expect(store.getWindowState(remote.id).open).toBe(false);
     await store.save();
+  });
+
+  it("normalizes group and tags as synchronized content", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    expect(note).toMatchObject({ groupName: "", tags: [] });
+    const letter = String.fromCodePoint(0x10330);
+    const longTag = `${"x".repeat(39)}${letter}tail`;
+    const tags = [" Work ", "work", "", "  ", longTag, ...Array.from({ length: 20 }, (_, index) => `tag-${index}`)];
+    store.getNote(note.id).dirty = false;
+    store.getNote(note.id).modifiedAt = 1;
+
+    const updated = store.updateContent(note.id, {
+      title: `${"t".repeat(199)}${letter}tail`,
+      groupName: `  ${"g".repeat(79)}${letter}tail  `,
+      tags,
+    });
+
+    expect(updated.title).toBe(`${"t".repeat(199)}${letter}`);
+    expect(updated.groupName).toBe(`${"g".repeat(79)}${letter}`);
+    expect(updated.tags).toHaveLength(16);
+    expect(updated.tags.slice(0, 3)).toEqual(["Work", `${"x".repeat(39)}${letter}`, "tag-0"]);
+    expect(store.getNote(note.id)).toMatchObject({ dirty: true, modifiedBy: store.state.deviceId });
+    expect(store.getNote(note.id).modifiedAt).toBeGreaterThan(1);
+    expect(store.listSummaries()[0]).toMatchObject({ groupName: updated.groupName, tags: updated.tags });
+    expect(store.buildSyncRequest().changes[0]).toMatchObject({ groupName: updated.groupName, tags: updated.tags });
+    await store.save();
+  });
+
+  it("loads legacy notes with empty group and tags", async () => {
+    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const legacy = new NoteStore(dataPath);
+    await legacy.load();
+    const note = legacy.createNote();
+    legacy.state.version = 5;
+    delete legacy.getNote(note.id).groupName;
+    delete legacy.getNote(note.id).tags;
+    await legacy.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.state.version).toBe(6);
+    expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [] });
   });
 });

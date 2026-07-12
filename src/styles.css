@@ -191,6 +191,204 @@ button {
   backdrop-filter: blur(14px);
 }
 
+.note-metadata-panel {
+  position: absolute;
+  z-index: 8;
+  right: 5px;
+  bottom: 29px;
+  display: grid;
+  width: min(243px, calc(100% - 10px));
+  max-height: calc(100% - 36px);
+  gap: 7px;
+  padding: 7px;
+  overflow: auto;
+  color: #30302d;
+  background: rgb(255 255 255 / 95%);
+  border: 1px solid rgb(45 42 30 / 14%);
+  border-radius: 4px;
+  box-shadow: 0 12px 28px rgb(35 32 18 / 20%);
+  backdrop-filter: blur(18px);
+  scrollbar-width: none;
+}
+
+.note-metadata-panel::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.note-metadata-header,
+.note-tags-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.note-metadata-header strong {
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.note-metadata-header .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
+.note-metadata-field {
+  display: grid;
+  gap: 3px;
+  color: #62615b;
+  font-size: 10.5px;
+}
+
+.note-group-input {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  height: 28px;
+  color: #77766f;
+  background: #fff;
+  border: 1px solid #d6d5cf;
+  border-radius: 3px;
+}
+
+.note-group-input:focus-within {
+  color: #3f4938;
+  border-color: #a6aa9e;
+  box-shadow: 0 0 0 2px rgb(80 91 69 / 9%);
+}
+
+.note-group-input svg {
+  justify-self: center;
+}
+
+.note-group-input input,
+.note-tags-editor input {
+  width: 100%;
+  min-width: 0;
+  color: #30312e;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 11.5px;
+}
+
+.note-tags-heading {
+  color: #62615b;
+  font-size: 10.5px;
+}
+
+.note-tags-heading > span:last-child {
+  color: #999890;
+  font-size: 9.5px;
+}
+
+.note-tags-editor {
+  display: flex;
+  min-height: 30px;
+  align-content: flex-start;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid #d6d5cf;
+  border-radius: 3px;
+}
+
+.note-tags-editor:focus-within {
+  border-color: #a6aa9e;
+  box-shadow: 0 0 0 2px rgb(80 91 69 / 9%);
+}
+
+.note-tags-editor input {
+  flex: 1 1 64px;
+  height: 20px;
+  padding: 0 3px;
+}
+
+.note-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  max-width: 100%;
+  gap: 2px;
+  padding-left: 5px;
+  overflow: hidden;
+  color: #52604c;
+  background: #e9ede4;
+  border: 1px solid #d8ded1;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+
+.note-tag-chip.is-inline {
+  padding-right: 5px;
+  color: #176c7a;
+  background: rgb(23 108 122 / 9%);
+  border-color: rgb(23 108 122 / 18%);
+}
+
+.note-tag-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-tag-chip button {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex: none;
+  place-items: center;
+  color: #7a8174;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.note-tag-chip button:hover,
+.note-tag-chip button:focus-visible {
+  color: #2f352c;
+  background: rgb(41 48 38 / 8%);
+  outline: none;
+}
+
+.note-tag-suggestions {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.note-tag-suggestions::-webkit-scrollbar {
+  display: none;
+}
+
+.note-tag-suggestions button {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  gap: 2px;
+  padding: 0 5px;
+  flex: none;
+  color: #686a64;
+  background: transparent;
+  border: 1px solid #dedfd9;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.note-tag-suggestions button:hover,
+.note-tag-suggestions button:focus-visible {
+  color: #30322e;
+  background: #eeefe9;
+  outline: none;
+}
+
 .sync-panel {
   position: absolute;
   z-index: 7;
@@ -539,6 +737,16 @@ button {
   text-underline-offset: 0.15em;
 }
 
+.note-editor .cm-md-tag {
+  padding: 0 2px;
+  color: #176c7a;
+  background: rgb(23 108 122 / 10%);
+  border-radius: 3px;
+  box-decoration-break: clone;
+  font-weight: 620;
+  -webkit-box-decoration-break: clone;
+}
+
 .note-footer {
   display: flex;
   align-items: center;
@@ -627,7 +835,8 @@ button {
 
 .is-collapsed .note-content,
 .is-collapsed .note-footer,
-.is-collapsed .color-picker {
+.is-collapsed .color-picker,
+.is-collapsed .note-metadata-panel {
   display: none;
 }
 

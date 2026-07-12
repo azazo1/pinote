@@ -44,6 +44,8 @@ fn change(id: &str, title: &str, markdown: &str, base_revision: i64, modified_at
         "title": title,
         "markdown": markdown,
         "color": "lemon",
+        "groupName": "工作",
+        "tags": ["重要", "本周"],
         "baseRevision": base_revision,
         "modifiedAt": modified_at,
         "modifiedBy": "device-a"
@@ -89,6 +91,8 @@ async fn revisions_update_and_stale_changes_create_an_idempotent_conflict_copy()
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(created["notes"][0]["revision"], 1);
+    assert_eq!(created["notes"][0]["groupName"], "工作");
+    assert_eq!(created["notes"][0]["tags"], json!(["重要", "本周"]));
 
     let (_, updated) = send_sync(
         app.clone(),
@@ -107,6 +111,8 @@ async fn revisions_update_and_stale_changes_create_an_idempotent_conflict_copy()
     assert_eq!(conflicted["conflicts"].as_array().unwrap().len(), 1);
     assert_eq!(conflicted["conflicts"][0]["revision"], 3);
     assert_eq!(conflicted["notes"][0]["markdown"], "服务器版本");
+    assert_eq!(conflicted["conflicts"][0]["groupName"], "工作");
+    assert_eq!(conflicted["conflicts"][0]["tags"], json!(["重要", "本周"]));
 
     let (_, retried) = send_sync(app, TOKEN, stale_request).await;
     assert_eq!(retried["notes"].as_array().unwrap().len(), 2);
@@ -172,6 +178,8 @@ async fn sqlite_data_and_migrations_survive_service_restart() {
     let parsed: SyncResponse = serde_json::from_value(snapshot).expect("响应协议应保持稳定");
     assert_eq!(parsed.notes.len(), 1);
     assert_eq!(parsed.notes[0].markdown, "保留内容");
+    assert_eq!(parsed.notes[0].group_name, "工作");
+    assert_eq!(parsed.notes[0].tags, vec!["重要", "本周"]);
 }
 
 #[tokio::test]
@@ -190,3 +198,126 @@ async fn invalid_payload_is_rejected_without_mutating_snapshot() {
     assert!(snapshot["notes"].as_array().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn note_metadata_updates_revision_and_participates_in_conflict_identity() {
+    let directory = TempDir::new().expect("临时目录应创建成功");
+    let app = test_app(&directory.path().join("pinote.db")).await;
+    send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![change("note-1", "标题", "内容", 0, 1_000)], Vec::new()),
+    )
+    .await;
+
+    let mut updated = change("note-1", "标题", "内容", 1, 2_000);
+    updated["groupName"] = json!("个人");
+    updated["tags"] = json!(["稍后", "引号\"与\\路径"]);
+    let (_, response) = send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![updated], Vec::new()),
+    )
+    .await;
+    assert_eq!(response["notes"][0]["revision"], 2);
+    assert_eq!(response["notes"][0]["groupName"], "个人");
+    assert_eq!(
+        response["notes"][0]["tags"],
+        json!(["稍后", "引号\"与\\路径"])
+    );
+
+    let mut stale_a = change("note-1", "标题", "内容", 1, 3_000);
+    stale_a["groupName"] = json!("归档");
+    stale_a["tags"] = json!(["甲"]);
+    let mut stale_b = stale_a.clone();
+    stale_b["tags"] = json!(["乙"]);
+    let (_, first) = send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![stale_a], Vec::new()),
+    )
+    .await;
+    let (_, second) = send_sync(app, TOKEN, request(vec![stale_b], Vec::new())).await;
+    assert_eq!(first["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(second["conflicts"].as_array().unwrap().len(), 1);
+    assert_ne!(first["conflicts"][0]["id"], second["conflicts"][0]["id"]);
+}
+
+#[tokio::test]
+async fn group_and_tag_limits_are_validated() {
+    let directory = TempDir::new().expect("临时目录应创建成功");
+    let app = test_app(&directory.path().join("pinote.db")).await;
+
+    let mut invalid_group = change("note-1", "标题", "内容", 0, 1_000);
+    invalid_group["groupName"] = json!("组".repeat(81));
+    let (group_status, _) = send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![invalid_group], Vec::new()),
+    )
+    .await;
+    assert_eq!(group_status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (index, group_name) in [" Work ", "bad\nname", "bad\0name"].into_iter().enumerate() {
+        let mut invalid_group = change(
+            &format!("invalid-group-{index}"),
+            "标题",
+            "内容",
+            0,
+            1_100 + index as i64,
+        );
+        invalid_group["groupName"] = json!(group_name);
+        let (status, _) = send_sync(
+            app.clone(),
+            TOKEN,
+            request(vec![invalid_group], Vec::new()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let mut invalid_tags = change("note-2", "标题", "内容", 0, 2_000);
+    invalid_tags["tags"] = json!((0..17).map(|index| format!("标签{index}")).collect::<Vec<_>>());
+    let (tag_status, _) = send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![invalid_tags], Vec::new()),
+    )
+    .await;
+    assert_eq!(tag_status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let mut invalid_tag_length = change("note-3", "标题", "内容", 0, 3_000);
+    invalid_tag_length["tags"] = json!(["签".repeat(41)]);
+    let (tag_length_status, _) = send_sync(
+        app.clone(),
+        TOKEN,
+        request(vec![invalid_tag_length], Vec::new()),
+    )
+    .await;
+    assert_eq!(tag_length_status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (index, tags) in [
+        json!([""]),
+        json!(["Rust", "rust"]),
+        json!(["bad\nvalue"]),
+        json!(["#Rust"]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut invalid_tag = change(
+            &format!("invalid-tag-{index}"),
+            "标题",
+            "内容",
+            0,
+            4_000 + index as i64,
+        );
+        invalid_tag["tags"] = tags;
+        let (status, _) = send_sync(
+            app.clone(),
+            TOKEN,
+            request(vec![invalid_tag], Vec::new()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}

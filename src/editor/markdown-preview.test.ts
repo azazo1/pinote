@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownLinePreview } from "./markdown-preview";
+import { markdownLinePreview, markdownTagDecorations } from "./markdown-preview";
 
 describe("markdownLinePreview", () => {
   it("hides block markers outside the active line", () => {
@@ -48,5 +48,21 @@ describe("markdownLinePreview", () => {
     const preview = markdownLinePreview("\\*literal*", 0, false);
 
     expect(preview.decorations).toEqual([]);
+  });
+
+  it("highlights document tags outside protected Markdown ranges", () => {
+    expect(markdownTagDecorations("Text #Rust")).toContainEqual({
+      kind: "mark",
+      from: 5,
+      to: 10,
+      className: "cm-md-tag",
+    });
+    expect(markdownTagDecorations("`#code` and \\#plain\n```\n#fenced\n```\n[jump](#anchor)")).not.toContainEqual(
+      expect.objectContaining({ className: "cm-md-tag" }),
+    );
+    expect(markdownTagDecorations("Text #Rust", [])).toEqual([]);
+    expect(markdownTagDecorations(`#${"x".repeat(41)}`, ["x".repeat(40)])).toEqual([
+      { kind: "mark", from: 0, to: 41, className: "cm-md-tag" },
+    ]);
   });
 });

@@ -1,3 +1,5 @@
+import { findInlineTags, MAX_TAG_LENGTH, normalizeTags } from "../lib/note-metadata";
+
 export type MarkdownReplacement =
   | { kind: "bullet" }
   | { kind: "ordered"; label: string }
@@ -11,6 +13,23 @@ export type MarkdownDecoration =
 export interface MarkdownLinePreview {
   className?: string;
   decorations: MarkdownDecoration[];
+}
+
+export function markdownTagDecorations(markdown: string, highlightedTags?: readonly string[]): MarkdownDecoration[] {
+  const highlightedKeys = highlightedTags
+    ? new Set(normalizeTags(highlightedTags).map((tag) => tag.toLowerCase()))
+    : null;
+  return findInlineTags(markdown).flatMap((tag) => {
+    const normalized = normalizeTags([tag.tag])[0];
+    if (!normalized || (highlightedKeys && !highlightedKeys.has(normalized.toLowerCase()))) return [];
+    const highlightedText = Array.from(tag.tag).slice(0, MAX_TAG_LENGTH).join("");
+    return [{
+      kind: "mark" as const,
+      from: tag.from,
+      to: tag.from + 1 + highlightedText.length,
+      className: "cm-md-tag",
+    }];
+  });
 }
 
 interface InlineCandidate {
