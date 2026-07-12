@@ -2,6 +2,32 @@ import { _electron as electron, expect, test, type Page } from "playwright/test"
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+test("新建便签聚焦标题并用回车进入内容", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-focus-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+
+    await mainWindow.locator(".main-create-button").click();
+    await expect.poll(() => app.windows().find((page) => page.url().includes("noteId="))).toBeTruthy();
+    const noteWindow = app.windows().find((page) => page.url().includes("noteId="));
+    if (!noteWindow) throw new Error("便签窗口未创建");
+
+    const titleInput = noteWindow.locator(".title-input");
+    const editorContent = noteWindow.locator(".note-editor .cm-content");
+    await expect(titleInput).toBeFocused();
+    await titleInput.press("Enter");
+    await expect(editorContent).toBeFocused();
+  } finally {
+    await app.close();
+  }
+});
+
 test("主窗口和便签窗口关键流程", async () => {
   const app = await electron.launch({
     args: ["."],

@@ -181,7 +181,7 @@ export class WindowManager {
     return window;
   }
 
-  open(note) {
+  open(note, openOptions = {}) {
     const existing = this.windows.get(note.id);
     if (existing && !existing.isDestroyed()) return existing;
     if (existing) this.windows.delete(note.id);
@@ -222,7 +222,10 @@ export class WindowManager {
       });
     }
     this.applyPinnedLevel(window, state.pinned);
-    this.loadRenderer(window, { noteId: note.id });
+    this.loadRenderer(window, {
+      noteId: note.id,
+      ...(openOptions.initialFocus ? { initialFocus: openOptions.initialFocus } : {}),
+    });
 
     window.once("ready-to-show", () => {
       if (!this.store.isDocked(note.id) || (this.getDockMode() === "inline" && this.activeDockedId === note.id)) {
@@ -328,7 +331,7 @@ export class WindowManager {
       x: bounds ? bounds.x + 28 : undefined,
       y: bounds ? bounds.y + 28 : undefined,
     });
-    this.open(note);
+    this.open(note, { initialFocus: "title" });
     this.broadcastNoteList();
     return note;
   }

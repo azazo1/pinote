@@ -17,6 +17,7 @@ import { emacsMotionTarget, type EmacsMotionKey } from "../editor/emacs-motion";
 import { markdownLinePreview, markdownTagDecorations, type MarkdownReplacement } from "../editor/markdown-preview";
 
 interface NoteEditorProps {
+  autoFocus?: boolean;
   content: string;
   highlightedTags: string[];
   onChange: (content: string) => void;
@@ -176,7 +177,7 @@ const emacsKeymap = [
 ];
 
 export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEditor(
-  { content, highlightedTags, onChange },
+  { autoFocus = true, content, highlightedTags, onChange },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -223,7 +224,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
     });
 
     viewRef.current = view;
-    view.focus();
+    if (autoFocus) view.focus();
     return () => {
       viewRef.current = null;
       view.destroy();

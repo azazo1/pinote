@@ -23,7 +23,9 @@ interface PendingBatch {
 const SAVE_RETRY_DELAYS_MS = [500, 2_000, 5_000];
 
 export default function App() {
-  const noteId = useMemo(() => new URLSearchParams(window.location.search).get("noteId") ?? "", []);
+  const query = useMemo(() => new URLSearchParams(window.location.search), []);
+  const noteId = query.get("noteId") ?? "";
+  const initialFocus = query.get("initialFocus");
   const [note, setNote] = useState<Note | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [metadataOpen, setMetadataOpen] = useState(false);
@@ -43,6 +45,7 @@ export default function App() {
   const collapsedRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<NoteEditorHandle>(null);
+  const initialFocusApplied = useRef(false);
 
   collapsedRef.current = note?.collapsed ?? false;
 
@@ -314,6 +317,12 @@ export default function App() {
     toggleSync,
   ]);
 
+  useEffect(() => {
+    if (!note || initialFocus !== "title" || initialFocusApplied.current) return;
+    initialFocusApplied.current = true;
+    titleInputRef.current?.focus();
+  }, [initialFocus, note]);
+
   if (!note) return <main className="loading-note" aria-label="正在加载" />;
 
   const palette = noteColors[note.color as keyof typeof noteColors] ?? noteColors.lemon;
@@ -375,10 +384,21 @@ export default function App() {
           className="title-input"
           value={note.title}
           onChange={(event) => applyContentPatch({ title: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            editorRef.current?.focus();
+          }}
           placeholder="标题"
           aria-label="标题"
         />
-        <NoteEditor ref={editorRef} content={note.markdown} highlightedTags={inlineTags} onChange={applyMarkdownPatch} />
+        <NoteEditor
+          ref={editorRef}
+          autoFocus={initialFocus !== "title"}
+          content={note.markdown}
+          highlightedTags={inlineTags}
+          onChange={applyMarkdownPatch}
+        />
       </section>
 
       {inlineShelf && <InlineShelf activeId={note.id} />}
