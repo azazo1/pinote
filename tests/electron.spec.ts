@@ -86,6 +86,18 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => mainWindow.evaluate(async () => (await window.noteAPI.getAppSettings()).general.defaultNotePinned)).toBe(true);
     await defaultPinned.uncheck();
     await expect.poll(() => mainWindow.evaluate(async () => (await window.noteAPI.getAppSettings()).general.defaultNotePinned)).toBe(false);
+    const dockVisibilitySupported = await mainWindow.evaluate(async () => (
+      await window.noteAPI.getAppSettings()
+    ).general.hideDockOnMainCloseSupported);
+    expect(dockVisibilitySupported).toBe(process.platform === "darwin");
+    if (dockVisibilitySupported) {
+      const hideDockOnClose = settingsCenter.getByRole("checkbox", { name: "关闭主窗口后隐藏 Dock 图标" });
+      await expect(hideDockOnClose).not.toBeChecked();
+      await hideDockOnClose.check();
+      await expect.poll(() => mainWindow.evaluate(async () => (
+        await window.noteAPI.getAppSettings()
+      ).general.hideDockOnMainClose)).toBe(true);
+    }
 
     await settingsCenter.getByRole("button", { name: "快捷键" }).click();
     const syncShortcutRow = settingsCenter.locator(".shortcut-row").filter({ hasText: "立即同步" });
@@ -1038,9 +1050,15 @@ test("主窗口和便签窗口关键流程", async () => {
     await triggerShortcut(mainWindow, "close-window");
     await expect.poll(readMainState).toMatchObject({ visible: false, minimized: false, destroyed: false });
     expect(mainWindow.isClosed()).toBe(false);
+    if (process.platform === "darwin") {
+      await expect.poll(() => app.evaluate(({ app }) => app.dock.isVisible())).toBe(false);
+    }
 
     await triggerShortcut(reopenedWindow!, "open-main-window");
     await expect.poll(readMainState).toMatchObject({ visible: true, minimized: false, destroyed: false });
+    if (process.platform === "darwin") {
+      await expect.poll(() => app.evaluate(({ app }) => app.dock.isVisible())).toBe(true);
+    }
   } finally {
     await app.close();
   }

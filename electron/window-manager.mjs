@@ -26,9 +26,11 @@ const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
 
 export class WindowManager {
-  constructor(store, { requestQuit } = {}) {
+  constructor(store, { requestQuit, showDock, hideDock } = {}) {
     this.store = store;
     this.requestQuit = requestQuit;
+    this.showDock = showDock;
+    this.hideDock = hideDock;
     this.windows = new Map();
     this.mainWindow = null;
     this.shelfWindow = null;
@@ -127,6 +129,7 @@ export class WindowManager {
   }
 
   openMainWindow() {
+    this.showDock?.();
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       if (this.mainWindow.isMinimized()) this.mainWindow.restore();
       this.mainWindow.show();
@@ -164,6 +167,7 @@ export class WindowManager {
       event.preventDefault();
       this.ignoreMainActivationUntil = Date.now() + 350;
       window.hide();
+      if (this.store.state.preferences.hideDockOnMainClose) this.hideDock?.();
       log.info("主窗口已隐藏到系统托盘");
     });
     if (process.platform === "win32") {

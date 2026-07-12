@@ -432,6 +432,7 @@ describe("NoteStore", () => {
     expect(restored.getPreferences()).toMatchObject({
       showMainOnLogin: true,
       closeMainToTray: true,
+      hideDockOnMainClose: false,
       defaultNoteColor: "lemon",
       defaultNotePinned: false,
     });
@@ -451,5 +452,18 @@ describe("NoteStore", () => {
     expect(note).toMatchObject({ color: "mint", pinned: true });
     store.updatePreferences({ defaultNoteColor: "purple" });
     expect(store.getPreferences().defaultNoteColor).toBe("lemon");
+  });
+
+  it("persists the Dock visibility preference", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath, "darwin");
+    await store.load();
+    store.updatePreferences({ hideDockOnMainClose: true });
+    await store.save();
+
+    const restored = new NoteStore(dataPath, "darwin");
+    await restored.load();
+
+    expect(restored.getPreferences().hideDockOnMainClose).toBe(true);
   });
 });

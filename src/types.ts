@@ -90,6 +90,8 @@ export interface GeneralSettings {
   launchAtLoginSupported: boolean;
   showMainOnLogin: boolean;
   closeMainToTray: boolean;
+  hideDockOnMainClose: boolean;
+  hideDockOnMainCloseSupported: boolean;
   defaultNoteColor: string;
   defaultNotePinned: boolean;
 }
@@ -157,7 +159,9 @@ export interface NoteAPI {
   configureSync: (settings: { url: string; token: string }) => Promise<SyncSettings>;
   syncNow: () => Promise<SyncStatus>;
   getAppSettings: () => Promise<AppSettings>;
-  updateGeneralSettings: (patch: Partial<Omit<GeneralSettings, "launchAtLoginSupported">>) => Promise<AppSettings>;
+  updateGeneralSettings: (
+    patch: Partial<Omit<GeneralSettings, "launchAtLoginSupported" | "hideDockOnMainCloseSupported">>,
+  ) => Promise<AppSettings>;
   updateShortcut: (
     id: ShortcutCommandId,
     patch: { accelerator?: string | null; global?: boolean },

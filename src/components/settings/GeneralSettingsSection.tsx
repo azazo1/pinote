@@ -20,7 +20,10 @@ export function GeneralSettingsSection({ settings, onSettings }: GeneralSettings
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  async function update(key: keyof Omit<GeneralSettings, "launchAtLoginSupported">, value: boolean | string) {
+  async function update(
+    key: keyof Omit<GeneralSettings, "launchAtLoginSupported" | "hideDockOnMainCloseSupported">,
+    value: boolean | string,
+  ) {
     setBusy(key);
     setError("");
     try {
@@ -64,6 +67,15 @@ export function GeneralSettingsSection({ settings, onSettings }: GeneralSettings
           disabled={busy === "closeMainToTray"}
           onChange={(checked) => void update("closeMainToTray", checked)}
         />
+        {settings.hideDockOnMainCloseSupported && (
+          <SettingToggle
+            label="关闭主窗口后隐藏 Dock 图标"
+            description="从托盘重新打开主窗口时恢复显示"
+            checked={settings.hideDockOnMainClose}
+            disabled={busy === "hideDockOnMainClose"}
+            onChange={(checked) => void update("hideDockOnMainClose", checked)}
+          />
+        )}
       </section>
 
       <section className="settings-group" aria-labelledby="note-defaults-heading">

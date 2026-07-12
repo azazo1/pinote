@@ -47,7 +47,11 @@ app.whenReady().then(async () => {
   log.info("Pinote 正在启动", { platform: process.platform, electron: process.versions.electron });
   store = new NoteStore(app.getPath("userData"));
   await store.load();
-  windows = new WindowManager(store, { requestQuit: (owner) => void confirmAndQuit(owner) });
+  windows = new WindowManager(store, {
+    requestQuit: (owner) => void confirmAndQuit(owner),
+    showDock: showDockIcon,
+    hideDock: hideDockIcon,
+  });
   sync = new SyncService(store, windows);
   registerIpc();
   installTray();
@@ -365,6 +369,8 @@ function getAppSettings() {
       launchAtLoginSupported: loginSupported,
       showMainOnLogin: preferences.showMainOnLogin,
       closeMainToTray: preferences.closeMainToTray,
+      hideDockOnMainClose: preferences.hideDockOnMainClose,
+      hideDockOnMainCloseSupported: process.platform === "darwin",
       defaultNoteColor: preferences.defaultNoteColor,
       defaultNotePinned: preferences.defaultNotePinned,
     },
@@ -379,7 +385,7 @@ function updateGeneralSettings(patch) {
   if (!patch || typeof patch !== "object") throw new Error("设置内容无效");
   const current = store.getPreferences();
   const preferencesPatch = {};
-  for (const key of ["showMainOnLogin", "closeMainToTray", "defaultNotePinned"]) {
+  for (const key of ["showMainOnLogin", "closeMainToTray", "hideDockOnMainClose", "defaultNotePinned"]) {
     if (typeof patch[key] === "boolean") preferencesPatch[key] = patch[key];
   }
   if (typeof patch.defaultNoteColor === "string") preferencesPatch.defaultNoteColor = patch.defaultNoteColor;
@@ -407,6 +413,19 @@ function setLoginItem(openAtLogin, showMainOnLogin) {
 
 function broadcastSettings() {
   windows.broadcast("settings:changed", getAppSettings());
+}
+
+function showDockIcon() {
+  if (process.platform !== "darwin") return;
+  void app.dock.show().catch((error) => {
+    log.warn("显示 Dock 图标失败", { message: error instanceof Error ? error.message : "未知错误" });
+  });
+}
+
+function hideDockIcon() {
+  if (process.platform !== "darwin") return;
+  app.dock.hide();
+  log.info("主窗口关闭后已隐藏 Dock 图标");
 }
 
 function installTray() {

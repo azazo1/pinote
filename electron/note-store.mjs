@@ -374,6 +374,7 @@ function normalizePreferences(value, platform) {
   return {
     showMainOnLogin: value?.showMainOnLogin !== false,
     closeMainToTray: value?.closeMainToTray !== false,
+    hideDockOnMainClose: Boolean(value?.hideDockOnMainClose),
     defaultNoteColor: NOTE_COLORS.has(value?.defaultNoteColor) ? value.defaultNoteColor : DEFAULT_COLOR,
     defaultNotePinned: Boolean(value?.defaultNotePinned),
     shortcuts: normalizeShortcutBindings(value?.shortcuts ?? defaultShortcutBindings(platform), platform),
