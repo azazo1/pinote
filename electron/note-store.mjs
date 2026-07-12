@@ -3,9 +3,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
 
-const CURRENT_VERSION = 6;
+const CURRENT_VERSION = 7;
 const DEFAULT_COLOR = "lemon";
-const DEFAULT_SHELF_POSITION = 0.5;
+const DEFAULT_SHELF_PLACEMENT = Object.freeze({ x: 1, y: 0.5, edge: "right" });
 const MAX_GROUP_NAME_LENGTH = 80;
 const MAX_TAG_COUNT = 16;
 const MAX_TAG_LENGTH = 40;
@@ -179,20 +179,20 @@ export class NoteStore {
     return true;
   }
 
-  getShelfPosition(displayId) {
+  getShelfPlacement(displayId) {
     const key = normalizeDisplayId(displayId);
-    if (key === null) return DEFAULT_SHELF_POSITION;
-    return this.state.shelf.positions[key] ?? DEFAULT_SHELF_POSITION;
+    if (key === null) return { ...DEFAULT_SHELF_PLACEMENT };
+    return { ...(this.state.shelf.placements[key] ?? DEFAULT_SHELF_PLACEMENT) };
   }
 
-  setShelfPosition(displayId, normalizedPosition, persist = true) {
+  setShelfPlacement(displayId, placement, persist = true) {
     const key = normalizeDisplayId(displayId);
-    if (key === null || !Number.isFinite(normalizedPosition)) return null;
-    const position = clamp(normalizedPosition, 0, 1, DEFAULT_SHELF_POSITION);
+    if (key === null || !placement || typeof placement !== "object") return null;
+    const position = normalizeShelfPlacement(placement);
     this.state.shelf.displayId = key;
-    this.state.shelf.positions[key] = position;
+    this.state.shelf.placements[key] = position;
     if (persist) void this.save();
-    return position;
+    return { ...position };
   }
 
   setSyncSettings(url, encryptedToken) {
@@ -307,7 +307,7 @@ function createEmptyState() {
     notes: [],
     windows: {},
     deleted: [],
-    shelf: { displayId: null, positions: {} },
+    shelf: { displayId: null, placements: {} },
     sync: { url: "", encryptedToken: "" },
   };
 }
@@ -399,14 +399,29 @@ function normalizeDockState(value, fallback = "free") {
 }
 
 function normalizeShelfState(value) {
-  const positions = Object.fromEntries(
-    Object.entries(value?.positions ?? {})
-      .filter(([displayId, position]) => normalizeDisplayId(displayId) !== null && Number.isFinite(position))
-      .map(([displayId, position]) => [displayId, clamp(position, 0, 1, DEFAULT_SHELF_POSITION)]),
+  const placements = Object.fromEntries(
+    Object.entries(value?.placements ?? value?.positions ?? {})
+      .filter(([displayId]) => normalizeDisplayId(displayId) !== null)
+      .map(([displayId, placement]) => [displayId, normalizeShelfPlacement(placement)]),
   );
   return {
     displayId: normalizeDisplayId(value?.displayId),
-    positions,
+    placements,
+  };
+}
+
+function normalizeShelfPlacement(value) {
+  if (Number.isFinite(value)) {
+    return {
+      x: DEFAULT_SHELF_PLACEMENT.x,
+      y: clamp(value, 0, 1, DEFAULT_SHELF_PLACEMENT.y),
+      edge: "right",
+    };
+  }
+  return {
+    x: clamp(value?.x, 0, 1, DEFAULT_SHELF_PLACEMENT.x),
+    y: clamp(value?.y, 0, 1, DEFAULT_SHELF_PLACEMENT.y),
+    edge: value?.edge === "left" || value?.edge === "free" ? value.edge : "right",
   };
 }
 

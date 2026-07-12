@@ -11,11 +11,11 @@ const COLLAPSED_WIDTH = 253;
 const SHELF_COLLAPSED_SIZE = 36;
 const SHELF_EXPANDED_WIDTH = 200;
 const SHELF_MARGIN = 8;
+const SHELF_EDGE_SNAP_DISTANCE = 20;
 const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = 90;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 700;
-const SHELF_POSITION_SAVE_DELAY_MS = 120;
 const WINDOW_STATE_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
@@ -29,7 +29,7 @@ export class WindowManager {
     this.shelfExpanded = false;
     this.activeDockedId = null;
     this.hideTimer = null;
-    this.shelfPositionSaveTimer = null;
+    this.shelfMoveSession = null;
     this.animations = new Map();
     this.animatingWindows = new Set();
     this.boundsSaveTimers = new Map();
@@ -97,8 +97,7 @@ export class WindowManager {
   prepareToQuit() {
     this.quitting = true;
     this.cancelHideGroup();
-    clearTimeout(this.shelfPositionSaveTimer);
-    this.shelfPositionSaveTimer = null;
+    this.finishShelfMove(false);
     const pendingWindowIds = new Set([...this.boundsSaveTimers.keys(), ...this.resizeSessions.keys()]);
     for (const id of pendingWindowIds) this.flushPendingBounds(id);
     this.resizeSessions.clear();
@@ -538,6 +537,7 @@ export class WindowManager {
   destroyShelfWindow() {
     this.cancelHideGroup();
     this.shelfExpanded = false;
+    this.shelfMoveSession = null;
     const shelf = this.shelfWindow;
     this.shelfWindow = null;
     if (!shelf || shelf.isDestroyed()) return;
@@ -573,13 +573,17 @@ export class WindowManager {
     if (process.platform === "darwin") {
       shelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
-    this.loadRenderer(shelf, { view: "shelf" });
+    this.loadRenderer(shelf, {
+      view: "shelf",
+      edge: this.store.getShelfPlacement(display.id).edge,
+    });
     shelf.once("ready-to-show", () => {
       if (this.shelfWindow === shelf && !shelf.isDestroyed() && this.store.listDockedNotes("shelf").length > 0) {
         shelf.showInactive();
       }
     });
     shelf.on("closed", () => {
+      this.shelfMoveSession = null;
       if (this.shelfWindow === shelf) this.shelfWindow = null;
     });
     return shelf;
@@ -594,46 +598,121 @@ export class WindowManager {
     const target = this.shelfBounds(display, expanded);
     this.shelfExpanded = expanded;
     shelf.webContents.send("shelf:expanded", expanded);
+    shelf.webContents.send("shelf:placement", this.store.getShelfPlacement(display.id).edge);
     this.animateBounds(shelf, target, SHELF_ANIMATION_MS);
   }
 
-  moveShelf(targetTop) {
-    if (!Number.isFinite(targetTop) || this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) {
+  beginShelfMove(sender) {
+    const shelf = this.shelfWindow;
+    if (
+      this.getDockMode() !== "shelf" ||
+      !shelf ||
+      shelf.isDestroyed() ||
+      shelf.webContents !== sender ||
+      this.store.listDockedNotes("shelf").length === 0
+    ) {
       return false;
     }
     this.cancelHideGroup();
-    const shelf = this.ensureShelfWindow();
-    if (!shelf) return false;
-    const current = shelf.getBounds();
-    const display = screen.getDisplayNearestPoint({
-      x: current.x + Math.round(current.width / 2),
-      y: Math.round(targetTop + current.height / 2),
-    });
-    const target = this.shelfBounds(display, this.shelfExpanded);
-    const area = display.workArea;
-    target.y = clampValue(Math.round(targetTop), area.y, area.y + area.height - target.height);
-    const normalizedCenter = clampValue(
-      (target.y + target.height / 2 - area.y) / area.height,
-      0,
-      1,
-    );
-    const previousDisplayId = this.store.state.shelf.displayId;
-    this.store.setShelfPosition(display.id, normalizedCenter, false);
-    this.scheduleShelfPositionSave();
     this.cancelAnimation(shelf);
-    shelf.setBounds(target, false);
-    if (String(previousDisplayId) !== String(display.id)) {
-      log.info("侧边架已移动到显示器", { displayId: display.id });
-    }
+    const display = screen.getDisplayMatching(shelf.getBounds());
+    const startBounds = this.shelfBounds(display, this.shelfExpanded);
+    shelf.setBounds(startBounds, false);
+    this.shelfMoveSession = {
+      senderId: sender.id,
+      startDisplayId: display.id,
+      displayId: display.id,
+      startBounds,
+      bounds: startBounds,
+    };
     return true;
   }
 
-  scheduleShelfPositionSave() {
-    clearTimeout(this.shelfPositionSaveTimer);
-    this.shelfPositionSaveTimer = setTimeout(() => {
-      this.shelfPositionSaveTimer = null;
-      void this.store.save();
-    }, SHELF_POSITION_SAVE_DELAY_MS);
+  moveShelf(deltaX, deltaY, sender) {
+    const shelf = this.shelfWindow;
+    const session = this.shelfMoveSession;
+    if (
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY) ||
+      !shelf ||
+      shelf.isDestroyed() ||
+      shelf.webContents !== sender ||
+      session?.senderId !== sender.id
+    ) return false;
+
+    const candidate = {
+      x: session.startBounds.x + Math.round(deltaX),
+      y: session.startBounds.y + Math.round(deltaY),
+      width: session.startBounds.width,
+      height: session.startBounds.height,
+    };
+    const display = screen.getDisplayNearestPoint({
+      x: candidate.x + Math.round(candidate.width / 2),
+      y: candidate.y + Math.round(candidate.height / 2),
+    });
+    const area = display.workArea;
+    const width = Math.min(candidate.width, area.width);
+    const height = Math.min(candidate.height, area.height);
+    const target = {
+      x: clampValue(candidate.x, area.x, area.x + area.width - width),
+      y: clampValue(candidate.y, area.y, area.y + area.height - height),
+      width,
+      height,
+    };
+    session.displayId = display.id;
+    session.bounds = target;
+    shelf.setBounds(target, false);
+    if (this.shelfExpanded && this.activeDockedId) {
+      this.positionDockedNote(this.activeDockedId, display, target, false);
+    }
+    shelf.webContents.send("shelf:placement", "free");
+    return true;
+  }
+
+  endShelfMove(sender) {
+    if (this.shelfMoveSession?.senderId !== sender.id) return false;
+    return this.finishShelfMove(true);
+  }
+
+  finishShelfMove(persist) {
+    const session = this.shelfMoveSession;
+    this.shelfMoveSession = null;
+    const shelf = this.shelfWindow;
+    if (!session || !shelf || shelf.isDestroyed()) return false;
+    const display = screen.getAllDisplays().find((item) => String(item.id) === String(session.displayId))
+      ?? screen.getDisplayMatching(session.bounds);
+    const area = display.workArea;
+    const leftGap = session.bounds.x - area.x;
+    const rightGap = area.x + area.width - session.bounds.x - session.bounds.width;
+    const nearestEdgeGap = Math.min(leftGap, rightGap);
+    const edge = nearestEdgeGap <= SHELF_EDGE_SNAP_DISTANCE
+      ? leftGap <= rightGap ? "left" : "right"
+      : "free";
+    const placement = {
+      x: edge === "left" ? 0 : edge === "right" ? 1 : clampValue(
+        (session.bounds.x + session.bounds.width / 2 - area.x) / area.width,
+        0,
+        1,
+      ),
+      y: clampValue(
+        (session.bounds.y + session.bounds.height / 2 - area.y) / area.height,
+        0,
+        1,
+      ),
+      edge,
+    };
+    this.store.setShelfPlacement(display.id, placement, persist);
+    shelf.webContents.send("shelf:placement", edge);
+    const target = this.shelfBounds(display, this.shelfExpanded);
+    this.animateBounds(shelf, target, SHELF_ANIMATION_MS);
+    if (this.shelfExpanded && this.activeDockedId) {
+      this.positionDockedNote(this.activeDockedId, display, target, false);
+    }
+    if (String(session.startDisplayId) !== String(display.id)) {
+      log.info("侧边架已移动到显示器", { displayId: display.id });
+    }
+    log.info("侧边架位置已更新", { displayId: display.id, edge });
+    return true;
   }
 
   revealGroup() {
@@ -697,17 +776,33 @@ export class WindowManager {
     const shelf = this.ensureShelfWindow();
     if (!shelf) return;
     const display = screen.getDisplayMatching(shelf.getBounds());
+    return this.positionDockedNote(id, display, this.shelfBounds(display, true), true);
+  }
+
+  positionDockedNote(id, display, shelfTarget, focus) {
+    if (this.store.getDockState(id) !== "shelf") return null;
+    const window = this.windows.get(id);
+    if (!window || window.isDestroyed()) return null;
     const state = this.store.getWindowState(id);
     const height = state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height;
+    const leftSpace = shelfTarget.x - display.workArea.x;
+    const rightSpace = display.workArea.x + display.workArea.width - shelfTarget.x - shelfTarget.width;
+    const noteX = leftSpace >= state.bounds.width + 10 || leftSpace >= rightSpace
+      ? shelfTarget.x - state.bounds.width - 10
+      : shelfTarget.x + shelfTarget.width + 10;
     const bounds = this.clampBounds({
-      x: shelf.getBounds().x - state.bounds.width - 10,
+      x: noteX,
       y: Math.max(display.workArea.y + 12, screen.getCursorScreenPoint().y - 32),
       width: state.bounds.width,
       height,
     }, display.workArea);
     window.setBounds(bounds, false);
-    window.show();
-    window.focus();
+    if (focus) {
+      window.show();
+      window.focus();
+    } else if (!window.isVisible()) {
+      window.showInactive();
+    }
     return this.store.getRenderableNote(id);
   }
 
@@ -860,7 +955,7 @@ export class WindowManager {
     const saved = displays.find((display) => String(display.id) === String(savedId));
     if (saved) return saved;
     const fallback = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    this.store.setShelfPosition(fallback.id, this.store.getShelfPosition(fallback.id));
+    this.store.setShelfPlacement(fallback.id, this.store.getShelfPlacement(fallback.id));
     if (savedId !== null) log.info("侧边架显示器已恢复", { displayId: fallback.id });
     return fallback;
   }
@@ -870,10 +965,15 @@ export class WindowManager {
     const width = Math.min(expanded ? SHELF_EXPANDED_WIDTH : SHELF_COLLAPSED_SIZE, area.width);
     const desiredHeight = expanded ? this.shelfExpandedHeight(area) : SHELF_COLLAPSED_SIZE;
     const height = Math.min(desiredHeight, area.height);
-    const normalizedCenter = this.store.getShelfPosition(display.id);
-    const centerY = area.y + normalizedCenter * area.height;
+    const placement = this.store.getShelfPlacement(display.id);
+    const centerX = area.x + placement.x * area.width;
+    const centerY = area.y + placement.y * area.height;
     return {
-      x: Math.max(area.x, area.x + area.width - width - (expanded ? SHELF_MARGIN : 0)),
+      x: placement.edge === "right"
+        ? Math.max(area.x, area.x + area.width - width - (expanded ? SHELF_MARGIN : 0))
+        : placement.edge === "left"
+          ? Math.min(area.x + area.width - width, area.x + (expanded ? SHELF_MARGIN : 0))
+          : clampValue(Math.round(centerX - width / 2), area.x, area.x + area.width - width),
       y: clampValue(Math.round(centerY - height / 2), area.y, area.y + area.height - height),
       width,
       height,

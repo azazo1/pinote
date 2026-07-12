@@ -24,7 +24,9 @@ contextBridge.exposeInMainWorld("noteAPI", {
   listNotes: () => ipcRenderer.invoke("notes:list"),
   activateDockedNote: (id) => ipcRenderer.invoke("group:activate-note", id),
   setShelfExpanded: (expanded) => ipcRenderer.send("shelf:set-expanded", expanded),
-  moveShelf: (screenY) => ipcRenderer.send("shelf:move", screenY),
+  beginShelfMove: () => ipcRenderer.send("shelf:move-start"),
+  moveShelf: (deltaX, deltaY) => ipcRenderer.send("shelf:move", deltaX, deltaY),
+  endShelfMove: () => ipcRenderer.send("shelf:move-end"),
   getSyncSettings: () => ipcRenderer.invoke("sync:get-settings"),
   getSyncStatus: () => ipcRenderer.invoke("sync:get-status"),
   configureSync: (settings) => ipcRenderer.invoke("sync:configure", settings),
@@ -77,5 +79,10 @@ contextBridge.exposeInMainWorld("noteAPI", {
     const listener = (_event, expanded) => callback(expanded);
     ipcRenderer.on("shelf:expanded", listener);
     return () => ipcRenderer.removeListener("shelf:expanded", listener);
+  },
+  onShelfPlacement: (callback) => {
+    const listener = (_event, edge) => callback(edge);
+    ipcRenderer.on("shelf:placement", listener);
+    return () => ipcRenderer.removeListener("shelf:placement", listener);
   },
 });

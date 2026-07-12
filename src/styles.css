@@ -1024,7 +1024,6 @@ button {
   border: 1px solid rgb(35 35 32 / 12%);
   border-right: 0;
   border-radius: 18px 0 0 18px;
-  box-shadow: 0 5px 12px rgb(25 25 22 / 18%);
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -1039,6 +1038,27 @@ button {
 .shelf-handle svg {
   width: 11px;
   height: 11px;
+}
+
+.shelf-shell.is-left .shelf-handle {
+  right: auto;
+  left: 0;
+  border-right: 1px solid rgb(35 35 32 / 12%);
+  border-left: 0;
+  border-radius: 0 18px 18px 0;
+}
+
+.shelf-shell.is-free .shelf-handle {
+  top: 2px;
+  right: 2px;
+  bottom: auto;
+  left: auto;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid rgb(35 35 32 / 12%);
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgb(25 25 22 / 18%);
 }
 
 .shelf-content {
@@ -1065,17 +1085,24 @@ button {
   transform: translateX(0);
 }
 
-.shelf-shell.is-dragging,
-.shelf-shell.is-dragging .shelf-handle {
+.shelf-shell.is-left .shelf-content {
+  transform: translateX(-18px);
+}
+
+.shelf-shell.is-left.is-expanded .shelf-content {
+  transform: translateX(0);
+}
+
+.shelf-shell.is-dragging {
   cursor: grabbing;
 }
 
-.shelf-shell.is-dragging .shelf-handle {
+.shelf-shell.is-free:not(.is-expanded).is-dragging .shelf-handle {
   opacity: 1;
   color: #33322e;
   background: #cbc9c1;
   pointer-events: auto;
-  box-shadow: 0 6px 15px rgb(25 25 22 / 26%);
+  box-shadow: 0 4px 10px rgb(25 25 22 / 24%);
 }
 
 .shelf-heading {
@@ -1085,6 +1112,44 @@ button {
   min-height: 34px;
   padding: 0 1px 3px 5px;
   border-bottom: 1px solid rgb(40 40 36 / 9%);
+}
+
+.shelf-heading-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.shelf-drag-handle {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  color: #888780;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.shelf-drag-handle:hover {
+  color: #4f4e48;
+  background: rgb(40 40 36 / 7%);
+}
+
+.shelf-drag-handle:focus-visible {
+  outline: 2px solid rgb(55 54 49 / 44%);
+  outline-offset: -2px;
+}
+
+.shelf-shell.is-dragging .shelf-drag-handle {
+  color: #33322e;
+  cursor: grabbing;
+  background: rgb(40 40 36 / 10%);
 }
 
 .shelf-heading strong {

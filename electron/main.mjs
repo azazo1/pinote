@@ -147,9 +147,11 @@ function registerIpc() {
   ipcMain.handle("notes:list", () => store.listSummaries());
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
   ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
-  ipcMain.on("shelf:move", (_event, screenY) => {
-    if (Number.isFinite(screenY)) windows.moveShelf(screenY);
+  ipcMain.on("shelf:move-start", (event) => windows.beginShelfMove(event.sender));
+  ipcMain.on("shelf:move", (event, deltaX, deltaY) => {
+    if (validWindowDelta(deltaX) && validWindowDelta(deltaY)) windows.moveShelf(deltaX, deltaY, event.sender);
   });
+  ipcMain.on("shelf:move-end", (event) => windows.endShelfMove(event.sender));
   ipcMain.handle("sync:get-settings", () => sync.getSettings());
   ipcMain.handle("sync:get-status", () => sync.getStatus());
   ipcMain.handle("sync:configure", (_event, settings) => sync.configure(settings));
@@ -287,4 +289,8 @@ function validWindowSize(value) {
     width: Math.round(value.width),
     height: Math.round(value.height),
   };
+}
+
+function validWindowDelta(value) {
+  return Number.isFinite(value) && Math.abs(value) <= 1_000_000;
 }

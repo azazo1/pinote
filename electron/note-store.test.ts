@@ -115,7 +115,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(6);
+    expect(restored.state.version).toBe(7);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -140,24 +140,40 @@ describe("NoteStore", () => {
     expect(restored.state.deleted).toEqual([]);
   });
 
-  it("persists a clamped shelf position for each display", async () => {
+  it("persists a clamped shelf placement for each display", async () => {
     const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
     const first = new NoteStore(dataPath);
     await first.load();
     const note = first.createNote();
     const before = { revision: note.revision, modifiedAt: note.modifiedAt, dirty: note.dirty };
 
-    first.setShelfPosition(101, -0.4);
-    first.setShelfPosition(202, 0.76);
+    first.setShelfPlacement(101, { x: -0.4, y: 1.4, edge: "free" });
+    first.setShelfPlacement(202, { x: 0.24, y: 0.76, edge: "free" });
     await first.save();
 
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.getShelfPosition(101)).toBe(0);
-    expect(restored.getShelfPosition(202)).toBe(0.76);
+    expect(restored.getShelfPlacement(101)).toEqual({ x: 0, y: 1, edge: "free" });
+    expect(restored.getShelfPlacement(202)).toEqual({ x: 0.24, y: 0.76, edge: "free" });
     expect(restored.state.shelf.displayId).toBe("202");
     expect(restored.getNote(note.id)).toMatchObject(before);
+  });
+
+  it("migrates a version 6 shelf position to the right edge", async () => {
+    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const legacy = new NoteStore(dataPath);
+    await legacy.load();
+    legacy.state.version = 6;
+    legacy.state.shelf = { displayId: "101", positions: { 101: 0.32 } };
+    await legacy.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.state.version).toBe(7);
+    expect(restored.getShelfPlacement(101)).toEqual({ x: 1, y: 0.32, edge: "right" });
+    expect(restored.state.shelf).not.toHaveProperty("positions");
   });
 
   it("acknowledges an accepted content revision", async () => {
@@ -391,7 +407,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(6);
+    expect(restored.state.version).toBe(7);
     expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [] });
   });
 });

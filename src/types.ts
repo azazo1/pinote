@@ -29,6 +29,7 @@ export interface NoteSummary {
 }
 
 export type DockState = "free" | "shelf" | "inline";
+export type ShelfPlacementEdge = "left" | "right" | "free";
 
 export type NoteResizeEdge = "n" | "s" | "e" | "w" | "nw" | "sw" | "se";
 
@@ -82,7 +83,9 @@ export interface NoteAPI {
   listNotes: () => Promise<NoteSummary[]>;
   activateDockedNote: (id: string) => Promise<void>;
   setShelfExpanded: (expanded: boolean) => void;
-  moveShelf: (screenY: number) => void;
+  beginShelfMove: () => void;
+  moveShelf: (deltaX: number, deltaY: number) => void;
+  endShelfMove: () => void;
   getSyncSettings: () => Promise<SyncSettings>;
   getSyncStatus: () => Promise<SyncStatus>;
   configureSync: (settings: { url: string; token: string }) => Promise<SyncSettings>;
@@ -95,6 +98,7 @@ export interface NoteAPI {
   onSyncStatus: (callback: (status: SyncStatus) => void) => () => void;
   onNoteList: (callback: (notes: NoteSummary[]) => void) => () => void;
   onShelfExpanded: (callback: (expanded: boolean) => void) => () => void;
+  onShelfPlacement: (callback: (edge: ShelfPlacementEdge) => void) => () => void;
 }
 
 export interface SyncSettings {

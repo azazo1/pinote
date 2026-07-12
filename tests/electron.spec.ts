@@ -333,8 +333,50 @@ test("主窗口和便签窗口关键流程", async () => {
       if (!shelfWindow) return undefined;
       const bounds = shelfWindow.getBounds();
       const area = screen.getDisplayMatching(bounds).workArea;
-      return { ...bounds, rightGap: area.x + area.width - bounds.x - bounds.width };
+      return {
+        ...bounds,
+        leftGap: bounds.x - area.x,
+        rightGap: area.x + area.width - bounds.x - bounds.width,
+      };
     });
+    const readDockedLayout = () => app.evaluate(({ BrowserWindow, screen }, input) => {
+      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.noteUrl);
+      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
+      const note = noteWindow?.getBounds();
+      const shelf = shelfWindow?.getBounds();
+      return {
+        note,
+        shelf,
+        area: shelf ? screen.getDisplayMatching(shelf).workArea : undefined,
+        noteVisible: noteWindow?.isVisible() ?? false,
+      };
+    }, { noteUrl: window.url() });
+    const moveGroupAwayFromCursor = () => app.evaluate(({ BrowserWindow, screen }, input) => {
+      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
+      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.noteUrl);
+      if (!shelfWindow) throw new Error("缺少侧边架测试窗口");
+      const area = screen.getDisplayMatching(shelfWindow.getBounds()).workArea;
+      const cursor = screen.getCursorScreenPoint();
+      const moveAway = (target: Electron.BrowserWindow) => {
+        const bounds = target.getBounds();
+        const candidates = [
+          { x: area.x, y: area.y },
+          { x: area.x + area.width - bounds.width, y: area.y },
+          { x: area.x, y: area.y + area.height - bounds.height },
+          { x: area.x + area.width - bounds.width, y: area.y + area.height - bounds.height },
+        ];
+        const position = candidates.find((candidate) => (
+          cursor.x < candidate.x ||
+          cursor.x > candidate.x + bounds.width ||
+          cursor.y < candidate.y ||
+          cursor.y > candidate.y + bounds.height
+        ));
+        if (!position) throw new Error("找不到空闲的聚群测试位置");
+        target.setPosition(position.x, position.y);
+      };
+      moveAway(shelfWindow);
+      if (noteWindow?.isVisible()) moveAway(noteWindow);
+    }, { noteUrl: window.url() });
     await expect.poll(readShelfBounds).toMatchObject({ width: 36, height: 36, rightGap: 0 });
     const shelfBeforeDrag = await readShelfBounds();
     expect(shelfBeforeDrag).toBeTruthy();
@@ -381,7 +423,10 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
     await shelf!.screenshot({ path: "/private/tmp/pinote-shelf-collapsed.png" });
     await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("width", "18px");
+    await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("box-shadow", "none");
     await shelf!.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
+    await shelf!.waitForTimeout(350);
+    expect(await shelf!.evaluate(() => window.innerWidth)).toBe(36);
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
     const shelfExpandedBounds = await readShelfBounds();
     expect(Math.abs(
@@ -389,19 +434,126 @@ test("主窗口和便签窗口关键流程", async () => {
       - (movedShelfBounds!.y + movedShelfBounds!.height / 2),
     )).toBeLessThanOrEqual(2);
     await expect(shelf!.locator(".shelf-content")).toBeVisible();
+    await expect(shelf!.getByLabel("移动侧边便签架")).toBeVisible();
+    const expandedBeforeDrag = await readShelfBounds();
+    await shelf!.evaluate(() => {
+      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
+      if (!handle) throw new Error("展开态拖动把手不存在");
+      handle.setPointerCapture = () => {};
+      handle.hasPointerCapture = () => false;
+      const pointerId = 19;
+      const screenX = window.screenX + 14;
+      const screenY = window.screenY + 16;
+      handle.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX,
+        screenY,
+      }));
+      handle.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX: screenX - 320,
+        screenY: screenY + 60,
+      }));
+    });
+    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-dragging/);
+    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-free/);
+    await expect.poll(readShelfBounds).toMatchObject({ width: 200 });
+    const expandedAfterDrag = await readShelfBounds();
+    expect(expandedAfterDrag!.y).toBeGreaterThan(expandedBeforeDrag!.y + 30);
+    expect(expandedAfterDrag!.rightGap).toBeGreaterThan(250);
+    await shelf!.evaluate(() => {
+      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
+      if (!handle) throw new Error("展开态拖动把手不存在");
+      handle.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerId: 19,
+      }));
+    });
+    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
+    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-free/);
+    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
     await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
     await shelf!.locator(".note-list-item").click();
     await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-    const dockedLayout = await app.evaluate(({ BrowserWindow }, input) => {
-      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.noteUrl);
-      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
-      return { note: noteWindow?.getBounds(), shelf: shelfWindow?.getBounds() };
-    }, { noteUrl: window.url() });
-    expect(dockedLayout.note!.x + dockedLayout.note!.width).toBeLessThanOrEqual(dockedLayout.shelf!.x);
+    const dockedLayout = await readDockedLayout();
+    expect(dockedLayout.note).toBeTruthy();
+    expect(dockedLayout.shelf).toBeTruthy();
+    expect(dockedLayout.area).toBeTruthy();
+    const initialLeftGap = dockedLayout.shelf!.x - dockedLayout.note!.x - dockedLayout.note!.width;
+    const initialRightGap = dockedLayout.note!.x - dockedLayout.shelf!.x - dockedLayout.shelf!.width;
+    expect(Math.max(initialLeftGap, initialRightGap)).toBeGreaterThanOrEqual(10);
     await window.screenshot({ path: "/private/tmp/pinote-docked-note.png" });
 
+    const followDelta = {
+      x: dockedLayout.shelf!.x + dockedLayout.shelf!.width / 2 < dockedLayout.area!.x + dockedLayout.area!.width / 2 ? 60 : -60,
+      y: dockedLayout.shelf!.y + dockedLayout.shelf!.height / 2 < dockedLayout.area!.y + dockedLayout.area!.height / 2 ? 40 : -40,
+    };
+    await shelf!.evaluate((delta) => {
+      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
+      if (!handle) throw new Error("展开态拖动把手不存在");
+      handle.setPointerCapture = () => {};
+      handle.hasPointerCapture = () => false;
+      const pointerId = 23;
+      const screenX = window.screenX + 14;
+      const screenY = window.screenY + 16;
+      handle.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX,
+        screenY,
+      }));
+      handle.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX: screenX + delta.x,
+        screenY: screenY + delta.y,
+      }));
+    }, followDelta);
+    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-dragging/);
+    await expect.poll(async () => {
+      const layout = await readDockedLayout();
+      return {
+        noteMoved: Boolean(layout.note && Math.abs(layout.note.x - dockedLayout.note!.x) > 20),
+        shelfMoved: Boolean(layout.shelf && Math.abs(layout.shelf.x - dockedLayout.shelf!.x) > 20),
+      };
+    }).toEqual({ noteMoved: true, shelfMoved: true });
+    await shelf!.evaluate(() => {
+      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
+      if (!handle) throw new Error("展开态拖动把手不存在");
+      handle.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerId: 23,
+      }));
+      window.noteAPI.cancelGroupHide();
+    });
+    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
+    const followedLayout = await readDockedLayout();
+    expect(followedLayout.noteVisible).toBe(true);
+    expect(followedLayout.note!.x).toBeGreaterThanOrEqual(followedLayout.area!.x);
+    expect(followedLayout.note!.x + followedLayout.note!.width).toBeLessThanOrEqual(followedLayout.area!.x + followedLayout.area!.width);
+    expect(followedLayout.shelf!.x).toBeGreaterThanOrEqual(followedLayout.area!.x);
+    expect(followedLayout.shelf!.x + followedLayout.shelf!.width).toBeLessThanOrEqual(followedLayout.area!.x + followedLayout.area!.width);
+    const followedLeftGap = followedLayout.shelf!.x - followedLayout.note!.x - followedLayout.note!.width;
+    const followedRightGap = followedLayout.note!.x - followedLayout.shelf!.x - followedLayout.shelf!.width;
+    expect(Math.max(followedLeftGap, followedRightGap)).toBeGreaterThanOrEqual(10);
+
     await window.evaluate(() => window.noteAPI.hideGroup());
-    await mainWindow.mouse.move(40, 120);
     await window.waitForTimeout(250);
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
     await expect.poll(() => readWindowVisible(window.url())).toBe(true);
@@ -411,18 +563,66 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => readWindowVisible(window.url())).toBe(true);
 
     await shelf!.evaluate(() => window.noteAPI.hideGroup());
-    await mainWindow.mouse.move(40, 120);
     await window.waitForTimeout(250);
     await window.evaluate(() => window.noteAPI.revealGroup());
     await window.waitForTimeout(800);
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
     await expect.poll(() => readWindowVisible(window.url())).toBe(true);
 
+    await moveGroupAwayFromCursor();
     await window.evaluate(() => window.noteAPI.hideGroup());
-    await mainWindow.bringToFront();
-    await mainWindow.mouse.move(40, 120);
     await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 2_000 }).toBe(36);
     await expect.poll(() => readWindowVisible(window.url())).toBe(false);
+    const collapsedAfterExpandedDrag = await readShelfBounds();
+    expect(Math.abs(
+      collapsedAfterExpandedDrag!.x + collapsedAfterExpandedDrag!.width / 2
+      - (followedLayout.shelf!.x + followedLayout.shelf!.width / 2),
+    )).toBeLessThanOrEqual(2);
+    expect(Math.abs(
+      collapsedAfterExpandedDrag!.y + collapsedAfterExpandedDrag!.height / 2
+      - (followedLayout.shelf!.y + followedLayout.shelf!.height / 2),
+    )).toBeLessThanOrEqual(2);
+    await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("width", "32px");
+    await expect(shelf!.getByLabel("展开侧边便签架")).not.toHaveCSS("box-shadow", "none");
+    await shelf!.screenshot({ path: "/private/tmp/pinote-shelf-free-ball.png" });
+    await shelf!.getByLabel("展开侧边便签架").click();
+    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 500 }).toBe(200);
+
+    await moveGroupAwayFromCursor();
+    await shelf!.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>(".shelf-shell");
+      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
+      if (!shell || !handle) throw new Error("展开态拖动区域不存在");
+      handle.setPointerCapture = () => {};
+      handle.hasPointerCapture = () => false;
+      const pointerId = 29;
+      handle.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        isPrimary: true,
+        pointerId,
+        screenX: window.screenX + 14,
+        screenY: window.screenY + 16,
+      }));
+      shell.dispatchEvent(new PointerEvent("pointerout", {
+        bubbles: true,
+        pointerId,
+        relatedTarget: null,
+      }));
+      handle.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+        pointerId,
+      }));
+    });
+    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
+    await shelf!.waitForTimeout(250);
+    expect(await shelf!.evaluate(() => window.innerWidth)).toBe(200);
+    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 2_000 }).toBe(36);
+    await shelf!.getByLabel("展开侧边便签架").click();
+    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 500 }).toBe(200);
 
     await secondWindow.getByLabel("便签操作").click();
     await secondWindow.getByRole("menuitem", { name: "收纳到侧边" }).click();
