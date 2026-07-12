@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   beginWindowMove: (id) => ipcRenderer.send("window:move-start", id),
   moveWindow: (id, x, y, pointerX, pointerY) => ipcRenderer.send("window:move", id, x, y, pointerX, pointerY),
   endWindowMove: (id) => ipcRenderer.send("window:move-end", id),
+  enableWindowFocus: (id) => ipcRenderer.send("window:enable-focus", id),
   beginWindowResize: (id) => ipcRenderer.send("window:resize-start", id),
   resizeWindow: (id, edge, bounds) => ipcRenderer.send("window:resize", id, edge, {
     width: bounds?.width,
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   cancelGroupHide: () => ipcRenderer.send("group:cancel-hide"),
   listNotes: () => ipcRenderer.invoke("notes:list"),
   activateDockedNote: (id) => ipcRenderer.invoke("group:activate-note", id),
+  closeDockedNote: (id) => ipcRenderer.invoke("group:close-docked-note", id),
   setShelfExpanded: (expanded) => ipcRenderer.send("shelf:set-expanded", expanded),
   beginShelfMove: () => ipcRenderer.send("shelf:move-start"),
   moveShelf: (deltaX, deltaY) => ipcRenderer.send("shelf:move", deltaX, deltaY),

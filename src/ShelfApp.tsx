@@ -241,10 +241,11 @@ export default function ShelfApp() {
   }
 
   function shelfDropIndex(id: string, screenX: number, screenY: number) {
+    if (!expanded || window.innerWidth <= 52) return null;
     const clientX = screenX - window.screenX;
     const clientY = screenY - window.screenY;
     if (clientX < 0 || clientX > window.innerWidth || clientY < 0 || clientY > window.innerHeight) return null;
-    const rows = [...document.querySelectorAll<HTMLElement>(".note-list-item")]
+    const rows = [...document.querySelectorAll<HTMLElement>(".note-list-row")]
       .filter((row) => row.dataset.noteId !== id && !row.classList.contains("is-drag-source"));
     const index = rows.findIndex((row) => clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
     return index < 0 ? rows.length : index;
@@ -314,6 +315,7 @@ export default function ShelfApp() {
           draggingId={draggingNoteId}
           dragReturnIndex={dragReturnIndex}
           onSelect={(id) => void window.noteAPI.activateDockedNote(id)}
+          onClose={(id) => void window.noteAPI.closeDockedNote(id)}
           onDragStart={beginNoteDrag}
           onDragMove={moveNoteDrag}
           onDragEnd={endNoteDrag}

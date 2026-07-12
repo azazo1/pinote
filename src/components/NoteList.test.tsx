@@ -17,7 +17,7 @@ describe("NoteList", () => {
     const onSelect = vi.fn();
     const view = render(<NoteList notes={notes} onSelect={onSelect} onDragStart={vi.fn()} />);
     const list = view.getByRole("list");
-    const first = noteRow(view.container, "first");
+    const first = noteButton(view.container, "first");
 
     fireEvent.pointerDown(first, pointerEvent({ pointerId: 1, screenX: 20, screenY: 20 }));
     fireEvent.pointerUp(list, pointerEvent({ pointerId: 1, screenX: 20, screenY: 20, buttons: 0 }));
@@ -34,7 +34,7 @@ describe("NoteList", () => {
       <NoteList notes={notes} onSelect={vi.fn()} onDragStart={onDragStart} onDragEnd={onDragEnd} />,
     );
     const list = view.getByRole("list");
-    const first = noteRow(view.container, "first");
+    const first = noteButton(view.container, "first");
     stubPointerCapture(list);
 
     drag(first, list, 2);
@@ -89,6 +89,12 @@ function noteRow(container: HTMLElement, id: string) {
   const row = container.querySelector<HTMLElement>(`[data-note-id="${id}"]`);
   if (!row) throw new Error(`缺少便签条 ${id}`);
   return row;
+}
+
+function noteButton(container: HTMLElement, id: string) {
+  const button = noteRow(container, id).querySelector<HTMLElement>(".note-list-item");
+  if (!button) throw new Error(`缺少便签按钮 ${id}`);
+  return button;
 }
 
 function createNote(id: string, title: string): NoteSummary {

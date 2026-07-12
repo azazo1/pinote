@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useRef, type PointerEvent } from "react";
 import type { NoteSummary, WindowBounds } from "../types";
 import { noteColors } from "./ColorPicker";
@@ -10,6 +11,7 @@ interface NoteListProps {
   draggingId?: string | null;
   dragReturnIndex?: number | null;
   onSelect: (id: string) => void;
+  onClose?: (id: string) => void;
   onDragStart?: (id: string, screenX: number, screenY: number, sourceBounds: WindowBounds) => void;
   onDragMove?: (id: string, screenX: number, screenY: number) => void;
   onDragEnd?: (id: string) => void;
@@ -30,6 +32,7 @@ export function NoteList({
   draggingId,
   dragReturnIndex,
   onSelect,
+  onClose,
   onDragStart,
   onDragMove,
   onDragEnd,
@@ -122,19 +125,35 @@ export function NoteList({
         const rowIndex = isDragSource ? -1 : visibleIndex++;
         const shiftsForDrop = dragReturnIndex !== null && dragReturnIndex !== undefined && rowIndex >= dragReturnIndex;
         return (
-          <button
+          <div
             key={note.id}
-            type="button"
             role="listitem"
             data-note-id={note.id}
-            className={`note-list-item${activeId === note.id ? " is-active" : ""}${isDragSource ? " is-drag-source" : ""}`}
+            className={`note-list-row${isDragSource ? " is-drag-source" : ""}`}
             style={shiftsForDrop ? { transform: "translateY(32px)" } : undefined}
-            onPointerDown={(event) => onPointerDown(event, note.id)}
-            onClick={() => selectNote(note.id)}
           >
-            <span className="note-list-swatch" style={{ background: palette.body }} />
-            <span>{note.title || "无标题"}</span>
-          </button>
+            <button
+              type="button"
+              className={`note-list-item${activeId === note.id ? " is-active" : ""}`}
+              onPointerDown={(event) => onPointerDown(event, note.id)}
+              onClick={() => selectNote(note.id)}
+            >
+              <span className="note-list-swatch" style={{ background: palette.body }} />
+              <span>{note.title || "无标题"}</span>
+            </button>
+            {onClose && (
+              <button
+                type="button"
+                className="note-list-close"
+                aria-label={`关闭 ${note.title || "无标题"}`}
+                title="关闭便签栏"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => onClose(note.id)}
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            )}
+          </div>
         );
       })}
       {draggedNote && dragReturnIndex !== null && dragReturnIndex !== undefined && (

@@ -87,6 +87,7 @@ export interface NoteAPI {
   beginWindowMove: (id: string) => void;
   moveWindow: (id: string, x: number, y: number, pointerX: number, pointerY: number) => void;
   endWindowMove: (id: string) => void;
+  enableWindowFocus: (id: string) => void;
   beginWindowResize: (id: string) => void;
   resizeWindow: (id: string, edge: NoteResizeEdge, size: WindowSize) => void;
   endWindowResize: (id: string) => void;
@@ -97,6 +98,7 @@ export interface NoteAPI {
   cancelGroupHide: () => void;
   listNotes: () => Promise<NoteSummary[]>;
   activateDockedNote: (id: string) => Promise<void>;
+  closeDockedNote: (id: string) => Promise<boolean>;
   setShelfExpanded: (expanded: boolean) => void;
   beginShelfMove: () => void;
   moveShelf: (deltaX: number, deltaY: number) => void;

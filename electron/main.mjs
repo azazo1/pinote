@@ -171,6 +171,7 @@ function registerIpc() {
     }
   });
   ipcMain.on("window:move-end", (event, id) => windows.endMove(validId(id), event.sender));
+  ipcMain.on("window:enable-focus", (event, id) => windows.enableWindowFocus(validId(id), event.sender));
   ipcMain.on("window:resize-start", (event, id) => windows.beginResize(validId(id), event.sender));
   ipcMain.on("window:resize", (event, id, edge, size) => {
     const safeSize = validWindowSize(size);
@@ -184,6 +185,7 @@ function registerIpc() {
   ipcMain.on("group:cancel-hide", () => windows.cancelHideGroup());
   ipcMain.handle("notes:list", () => store.listSummaries());
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
+  ipcMain.handle("group:close-docked-note", (_event, id) => windows.closeDockedNote(validId(id)));
   ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
   ipcMain.on("shelf:move-start", (event) => windows.beginShelfMove(event.sender));
   ipcMain.on("shelf:move", (event, deltaX, deltaY) => {

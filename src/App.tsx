@@ -330,6 +330,7 @@ export default function App() {
     <main
       className={`note-shell${note.collapsed ? " is-collapsed" : ""}${inlineShelf ? " has-inline-shelf" : ""}`}
       style={style}
+      onPointerDownCapture={() => window.noteAPI.enableWindowFocus(note.id)}
       onMouseEnter={docked ? () => window.noteAPI.revealGroup() : undefined}
       onMouseLeave={docked ? () => window.noteAPI.hideGroup() : undefined}
     >

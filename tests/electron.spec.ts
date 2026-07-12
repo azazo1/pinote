@@ -745,6 +745,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await shelf!.screenshot({ path: "/private/tmp/pinote-shelf.png" });
 
     const firstShelfItem = shelf!.locator(".note-list-item").filter({ hasText: "QA 便签" });
+    const firstShelfRow = shelf!.locator(`[data-note-id="${firstNoteId}"]`);
     await firstShelfItem.evaluate((item) => {
       const row = item as HTMLButtonElement;
       const list = row.closest<HTMLElement>(".note-list");
@@ -782,8 +783,8 @@ test("主窗口和便签窗口关键流程", async () => {
     expect(revealState.alwaysOnTop).toBe(true);
     expect(revealState.bounds!.width).toBeLessThan(360);
     expect(await readNoteDockState(window, firstNoteId)).toBe("shelf");
-    await expect(firstShelfItem).toHaveClass(/is-drag-source/);
-    await expect(firstShelfItem).toHaveCSS("opacity", "0");
+    await expect(firstShelfRow).toHaveClass(/is-drag-source/);
+    await expect(firstShelfRow).toHaveCSS("opacity", "0");
     await firstShelfItem.evaluate((item) => {
       item.dispatchEvent(new PointerEvent("pointermove", {
         bubbles: true,
@@ -795,7 +796,7 @@ test("主窗口和便签窗口关键流程", async () => {
       }));
     });
     await expect(shelf!.locator(".note-list-drop-slot")).toBeVisible();
-    await expect(firstShelfItem).toHaveClass(/is-drag-source/);
+    await expect(firstShelfRow).toHaveClass(/is-drag-source/);
     await firstShelfItem.evaluate((item) => {
       item.dispatchEvent(new PointerEvent("pointerup", {
         bubbles: true,
