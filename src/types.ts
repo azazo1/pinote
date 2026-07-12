@@ -30,6 +30,17 @@ export interface NoteSummary {
 
 export type DockState = "free" | "shelf" | "inline";
 
+export type NoteResizeEdge = "n" | "s" | "e" | "w" | "nw" | "sw" | "se";
+
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type WindowSize = Pick<WindowBounds, "width" | "height">;
+
 export interface GroupState {
   mode: "shelf" | "inline";
   activeId: string | null;
@@ -60,6 +71,9 @@ export interface NoteAPI {
   openMainWindow: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;
   moveWindow: (id: string, x: number, y: number) => void;
+  beginWindowResize: (id: string) => void;
+  resizeWindow: (id: string, edge: NoteResizeEdge, size: WindowSize) => void;
+  endWindowResize: (id: string) => void;
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   toggleNoteDock: (id: string) => Promise<DockToggleResult>;
   revealGroup: () => void;

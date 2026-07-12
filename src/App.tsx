@@ -8,6 +8,7 @@ import { NoteMetadataPanel } from "./components/NoteMetadataPanel";
 import { NoteMenu } from "./components/NoteMenu";
 import { SyncPanel } from "./components/SyncPanel";
 import { TitleBar } from "./components/TitleBar";
+import { WindowResizeHandles } from "./components/WindowResizeHandles";
 import { dateLabel } from "./lib/date-label";
 import { combineTagSources, extractInlineTags, normalizeTags, reconcileInlineTags } from "./lib/note-metadata";
 import type { Note, PlatformCapabilities, SyncStatus } from "./types";
@@ -257,6 +258,8 @@ export default function App() {
       onMouseEnter={docked ? () => window.noteAPI.revealGroup() : undefined}
       onMouseLeave={docked ? () => window.noteAPI.hideGroup() : undefined}
     >
+      {!note.collapsed && !capabilities.wayland && <WindowResizeHandles noteId={note.id} />}
+
       <TitleBar
         noteId={note.id}
         title={note.title}

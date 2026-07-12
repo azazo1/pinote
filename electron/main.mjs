@@ -12,6 +12,7 @@ log.transports.file.level = "info";
 log.transports.console.level = process.env.VITE_DEV_SERVER_URL ? "debug" : "info";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const RESIZE_EDGES = new Set(["n", "s", "e", "w", "nw", "sw", "se"]);
 
 let store;
 let windows;
@@ -132,6 +133,12 @@ function registerIpc() {
   ipcMain.on("window:move", (_event, id, x, y) => {
     if (Number.isFinite(x) && Number.isFinite(y)) windows.move(validId(id), x, y);
   });
+  ipcMain.on("window:resize-start", (event, id) => windows.beginResize(validId(id), event.sender));
+  ipcMain.on("window:resize", (event, id, edge, size) => {
+    const safeSize = validWindowSize(size);
+    if (validResizeEdge(edge) && safeSize) windows.resize(validId(id), edge, safeSize, event.sender);
+  });
+  ipcMain.on("window:resize-end", (event, id) => windows.endResize(validId(id), event.sender));
   ipcMain.handle("window:set-pinned", (_event, id, pinned) => windows.setPinned(validId(id), Boolean(pinned)));
   ipcMain.handle("group:toggle-note-dock", (_event, id) => windows.toggleNoteDock(validId(id)));
   ipcMain.on("group:reveal", () => windows.revealGroup());
@@ -266,4 +273,18 @@ function validId(value) {
 
 function validBaseRevision(value) {
   return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function validResizeEdge(value) {
+  return RESIZE_EDGES.has(value);
+}
+
+function validWindowSize(value) {
+  if (!value || typeof value !== "object") return null;
+  const entries = [value.width, value.height];
+  if (!entries.every((entry) => Number.isFinite(entry) && Math.abs(entry) <= 1_000_000)) return null;
+  return {
+    width: Math.round(value.width),
+    height: Math.round(value.height),
+  };
 }

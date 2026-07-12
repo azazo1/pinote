@@ -16,6 +16,7 @@ const SHELF_ANIMATION_MS = 90;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 700;
 const SHELF_POSITION_SAVE_DELAY_MS = 120;
+const WINDOW_STATE_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
 
@@ -31,6 +32,8 @@ export class WindowManager {
     this.shelfPositionSaveTimer = null;
     this.animations = new Map();
     this.animatingWindows = new Set();
+    this.boundsSaveTimers = new Map();
+    this.resizeSessions = new Map();
     this.rendererFlush = new RendererFlushCoordinator(1_200, (pending) => {
       log.warn("等待便签保存超时", { pending });
     });
@@ -96,6 +99,9 @@ export class WindowManager {
     this.cancelHideGroup();
     clearTimeout(this.shelfPositionSaveTimer);
     this.shelfPositionSaveTimer = null;
+    const pendingWindowIds = new Set([...this.boundsSaveTimers.keys(), ...this.resizeSessions.keys()]);
+    for (const id of pendingWindowIds) this.flushPendingBounds(id);
+    this.resizeSessions.clear();
   }
 
   cancelQuit() {
@@ -171,7 +177,7 @@ export class WindowManager {
       frame: false,
       transparent: true,
       show: false,
-      resizable: !state.collapsed,
+      resizable: this.wayland && !state.collapsed,
       maximizable: false,
       fullscreenable: false,
       alwaysOnTop: state.pinned,
@@ -192,13 +198,18 @@ export class WindowManager {
         window.show();
       }
     });
-    window.on("resize", () => this.persistBounds(note.id));
+    window.on("resize", () => this.schedulePersistBounds(note.id));
     window.on("move", () => this.handleWindowMove(note.id));
+    window.on("close", () => this.flushPendingBounds(note.id));
     window.on("closed", () => {
       this.cancelAnimation(window);
+      this.cancelPendingBounds(note.id);
+      this.resizeSessions.delete(note.id);
       if (this.windows.get(note.id) === window) this.windows.delete(note.id);
     });
     window.webContents.on("render-process-gone", (_event, details) => {
+      this.resizeSessions.delete(note.id);
+      this.flushPendingBounds(note.id);
       log.error("便签渲染进程退出", { id: note.id, reason: details.reason });
     });
     return window;
@@ -230,6 +241,7 @@ export class WindowManager {
     if (!this.store.updateWindow(id, { open: false })) return false;
     const window = this.windows.get(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
+    this.flushPendingBounds(id);
     this.windows.delete(id);
     window?.hide();
     if (window) {
@@ -318,10 +330,10 @@ export class WindowManager {
         height: state.bounds.height,
       };
       this.store.updateWindow(id, { bounds: docked ? state.bounds : target, collapsed: false });
-      window.setResizable(true);
+      window.setResizable(this.wayland);
       this.animateBounds(window, target, WINDOW_ANIMATION_MS, () => {
         window.setMinimumSize(COLLAPSED_WIDTH, 180);
-        window.setResizable(true);
+        window.setResizable(this.wayland);
       });
     }
     window.webContents.send("note:collapsed", collapsed);
@@ -353,6 +365,53 @@ export class WindowManager {
     window.setPosition(snapped.x, snapped.y);
   }
 
+  resize(id, edge, requestedSize, sender) {
+    const window = this.windows.get(id);
+    const state = this.store.getWindowState(id);
+    const session = this.resizeSessions.get(id);
+    if (
+      this.wayland ||
+      !window ||
+      window.isDestroyed() ||
+      window.webContents !== sender ||
+      session?.senderId !== sender.id ||
+      state.collapsed
+    ) return;
+    if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: false });
+
+    const width = clampValue(requestedSize.width, COLLAPSED_WIDTH, 760);
+    const height = clampValue(requestedSize.height, 180, 900);
+    const fromLeft = edge.includes("w");
+    const fromTop = edge.includes("n");
+    window.setBounds({
+      x: fromLeft ? session.bounds.x + session.bounds.width - width : session.bounds.x,
+      y: fromTop ? session.bounds.y + session.bounds.height - height : session.bounds.y,
+      width,
+      height,
+    }, false);
+  }
+
+  beginResize(id, sender) {
+    const window = this.windows.get(id);
+    if (
+      this.wayland ||
+      !window ||
+      window.isDestroyed() ||
+      window.webContents !== sender ||
+      this.store.getWindowState(id).collapsed
+    ) return;
+    this.cancelAnimation(window);
+    this.cancelPendingBounds(id);
+    window.setMinimumSize(COLLAPSED_WIDTH, 180);
+    this.resizeSessions.set(id, { senderId: sender.id, bounds: window.getBounds() });
+  }
+
+  endResize(id, sender) {
+    if (this.resizeSessions.get(id)?.senderId !== sender.id) return;
+    this.resizeSessions.delete(id);
+    this.flushPendingBounds(id);
+  }
+
   handleWindowMove(id) {
     const window = this.windows.get(id);
     if (!window || window.isDestroyed()) return;
@@ -364,7 +423,7 @@ export class WindowManager {
     ) {
       this.detachDockedNote(id, { restoreBounds: false });
     }
-    this.persistBounds(id);
+    this.schedulePersistBounds(id);
   }
 
   setPinned(id, pinned) {
@@ -383,6 +442,8 @@ export class WindowManager {
   remove(id) {
     const window = this.windows.get(id);
     if (!this.store.deleteNote(id)) return;
+    this.cancelPendingBounds(id);
+    this.resizeSessions.delete(id);
     window?.destroy();
     this.windows.delete(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
@@ -406,7 +467,7 @@ export class WindowManager {
       this.store.updateWindow(id, { open: true });
       window = this.open(note);
     }
-    this.persistBounds(id, true);
+    this.persistBounds(id);
     const mode = this.getDockMode();
     this.store.setDockState(id, mode);
     this.cancelHideGroup();
@@ -693,7 +754,7 @@ export class WindowManager {
       ? { ...bounds, x: bounds.x + bounds.width - COLLAPSED_WIDTH, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
       : bounds;
     window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
-    window.setResizable(!state.collapsed);
+    window.setResizable(this.wayland && !state.collapsed);
     this.applyPinnedLevel(window, state.pinned);
     window.show();
     if (focus) window.focus();
@@ -709,11 +770,11 @@ export class WindowManager {
     }
   }
 
-  persistBounds(id, force = false) {
-    if (this.store.isDocked(id) && !force) return;
+  persistBounds(id) {
+    if (this.store.isDocked(id)) return;
     const window = this.windows.get(id);
     if (!window || window.isDestroyed()) return;
-    if (this.animatingWindows.has(window.id) && !force) return;
+    if (this.animatingWindows.has(window.id)) return;
     const state = this.store.getWindowState(id);
     const bounds = window.getBounds();
     const display = screen.getDisplayMatching(bounds);
@@ -724,6 +785,25 @@ export class WindowManager {
         ? { ...state.bounds, x: bounds.x + bounds.width - state.bounds.width, y: bounds.y }
         : bounds,
     });
+  }
+
+  schedulePersistBounds(id) {
+    if (this.store.isDocked(id) || this.resizeSessions.has(id)) return;
+    clearTimeout(this.boundsSaveTimers.get(id));
+    this.boundsSaveTimers.set(id, setTimeout(() => {
+      this.boundsSaveTimers.delete(id);
+      this.persistBounds(id);
+    }, WINDOW_STATE_SAVE_DELAY_MS));
+  }
+
+  flushPendingBounds(id) {
+    this.cancelPendingBounds(id);
+    this.persistBounds(id);
+  }
+
+  cancelPendingBounds(id) {
+    clearTimeout(this.boundsSaveTimers.get(id));
+    this.boundsSaveTimers.delete(id);
   }
 
   animateBounds(window, target, duration = WINDOW_ANIMATION_MS, onComplete) {

@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld("noteAPI", {
   openMainWindow: () => ipcRenderer.invoke("window:open-main"),
   toggleCollapse: (id) => ipcRenderer.invoke("window:toggle-collapse", id),
   moveWindow: (id, x, y) => ipcRenderer.send("window:move", id, x, y),
+  beginWindowResize: (id) => ipcRenderer.send("window:resize-start", id),
+  resizeWindow: (id, edge, bounds) => ipcRenderer.send("window:resize", id, edge, {
+    width: bounds?.width,
+    height: bounds?.height,
+  }),
+  endWindowResize: (id) => ipcRenderer.send("window:resize-end", id),
   setPinned: (id, pinned) => ipcRenderer.invoke("window:set-pinned", id, pinned),
   toggleNoteDock: (id) => ipcRenderer.invoke("group:toggle-note-dock", id),
   revealGroup: () => ipcRenderer.send("group:reveal"),

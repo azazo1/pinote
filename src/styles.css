@@ -52,6 +52,69 @@ button {
   grid-template-rows: 22px;
 }
 
+.window-resize-handle {
+  position: absolute;
+  z-index: 20;
+  touch-action: none;
+}
+
+.window-resize-handle[data-resize-edge="n"] {
+  top: 0;
+  right: 46px;
+  left: 7px;
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.window-resize-handle[data-resize-edge="s"] {
+  right: 7px;
+  bottom: 0;
+  left: 7px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.window-resize-handle[data-resize-edge="e"] {
+  top: 20px;
+  right: 0;
+  bottom: 7px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.window-resize-handle[data-resize-edge="w"] {
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.window-resize-handle[data-resize-edge="nw"],
+.window-resize-handle[data-resize-edge="sw"],
+.window-resize-handle[data-resize-edge="se"] {
+  width: 7px;
+  height: 7px;
+}
+
+.window-resize-handle[data-resize-edge="nw"] {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.window-resize-handle[data-resize-edge="sw"] {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.window-resize-handle[data-resize-edge="se"] {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
 .title-bar {
   position: relative;
   z-index: 4;

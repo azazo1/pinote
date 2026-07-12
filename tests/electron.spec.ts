@@ -64,12 +64,46 @@ test("主窗口和便签窗口关键流程", async () => {
       const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
       return {
         platform: process.platform,
+        wayland: process.platform === "linux" && (Boolean(process.env.WAYLAND_DISPLAY) || process.env.XDG_SESSION_TYPE?.toLowerCase() === "wayland"),
         visibleOnAllWorkspaces: noteWindow?.isVisibleOnAllWorkspaces(),
         alwaysOnTop: noteWindow?.isAlwaysOnTop(),
+        resizable: noteWindow?.isResizable(),
       };
     }, window.url());
     if (workspaceState.platform === "darwin") expect(workspaceState.visibleOnAllWorkspaces).toBe(true);
     expect(workspaceState.alwaysOnTop).toBe(false);
+
+    const resizeEdges = window.locator(".window-resize-handle");
+    if (workspaceState.wayland) {
+      await expect(resizeEdges).toHaveCount(0);
+      expect(workspaceState.resizable).toBe(true);
+    } else {
+      await expect(resizeEdges).toHaveCount(7);
+      await expect(window.locator('[data-resize-edge="ne"]')).toHaveCount(0);
+      expect(workspaceState.resizable).toBe(false);
+      const overlappingEdges = await window.evaluate(() => {
+        const actions = document.querySelector(".window-actions")?.getBoundingClientRect();
+        if (!actions) return ["missing-actions"];
+        return [...document.querySelectorAll<HTMLElement>(".window-resize-handle")]
+          .filter((handle) => {
+            const bounds = handle.getBoundingClientRect();
+            return bounds.left < actions.right && bounds.right > actions.left && bounds.top < actions.bottom && bounds.bottom > actions.top;
+          })
+          .map((handle) => handle.dataset.resizeEdge ?? "unknown");
+      });
+      expect(overlappingEdges).toEqual([]);
+
+      const eastHandle = window.locator('[data-resize-edge="e"]');
+      const eastBounds = await eastHandle.boundingBox();
+      if (!eastBounds) throw new Error("右侧调整句柄不可用");
+      const initialWidth = await window.evaluate(() => window.innerWidth);
+      await window.mouse.move(eastBounds.x + 2, eastBounds.y + eastBounds.height / 2);
+      await window.mouse.down();
+      await window.mouse.move(eastBounds.x + 4, eastBounds.y + eastBounds.height / 2);
+      await window.mouse.move(eastBounds.x + 26, eastBounds.y + eastBounds.height / 2, { steps: 4 });
+      await window.mouse.up();
+      await expect.poll(() => window.evaluate(() => window.innerWidth)).toBe(initialWidth + 24);
+    }
 
     const fit = await window.evaluate(() => ({
       width: window.innerWidth,
@@ -187,11 +221,12 @@ test("主窗口和便签窗口关键流程", async () => {
     await window.getByRole("menuitem", { name: "新建便签" }).click();
     await expect.poll(() => app.windows().filter((page) => page.url().includes("noteId=")).length).toBe(2);
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
-    const secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
+    let secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
     expect(secondWindow).toBeTruthy();
     if (!secondWindow) throw new Error("第二张便签窗口未创建");
     const secondNoteId = new URL(secondWindow.url()).searchParams.get("noteId");
     if (!secondNoteId) throw new Error("第二张便签 id 不存在");
+    const secondNoteUrl = secondWindow.url();
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
     }, secondWindow.url())).toBe(true);
@@ -230,6 +265,10 @@ test("主窗口和便签窗口关键流程", async () => {
         nearY: targetY + 6,
         freeX: secondX - firstWidth - 60,
         freeY: targetY + 50,
+        secondX,
+        secondY: targetY,
+        secondWidth,
+        secondHeight,
       };
     }, { firstUrl: window.url(), secondUrl: secondWindow.url() });
 
@@ -267,7 +306,7 @@ test("主窗口和便签窗口关键流程", async () => {
     const resizable = await app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isResizable();
     }, window.url());
-    expect(resizable).toBe(true);
+    expect(resizable).toBe(workspaceState.wayland);
 
     const readNoteDockState = (page: Page, id: string) => page.evaluate(async (noteId) => {
       return (await window.noteAPI.getNote(noteId)).note?.dockState;
@@ -419,10 +458,26 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await shelf!.locator(".note-list-item").click();
     await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
+    const dockedSecondClosed = secondWindow.waitForEvent("close");
+    await secondWindow.getByLabel("关闭便签").click();
+    await dockedSecondClosed;
+    await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
+    await shelf!.locator(".note-list-item").click();
+    await expect.poll(() => app.windows().some((page) => page.url() === secondNoteUrl)).toBe(true);
+    secondWindow = app.windows().find((page) => page.url() === secondNoteUrl);
+    if (!secondWindow) throw new Error("侧边便签未重新打开");
     await secondWindow.getByLabel("便签操作").click();
     await secondWindow.getByRole("menuitem", { name: "移出侧边" }).click();
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
     await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
+      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.getBounds();
+    }, secondWindow.url())).toEqual({
+      x: snapFixture.secondX,
+      y: snapFixture.secondY,
+      width: snapFixture.secondWidth,
+      height: snapFixture.secondHeight,
+    });
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(false);
 
     const firstClosed = window.waitForEvent("close");
