@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test, type Page } from "playwright/test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 test("主窗口和便签窗口关键流程", async () => {
@@ -16,6 +17,27 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(mainWindow.locator(".main-shell")).toBeVisible();
     await expect(mainWindow.getByText("还没有便签")).toBeVisible();
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
+    const trayTemplatePath = path.resolve("electron/assets/trayTemplate.png");
+    const trayRetinaTemplatePath = path.resolve("electron/assets/trayTemplate@2x.png");
+    const trayIconState = await app.evaluate(({ nativeImage }, input) => {
+      const image = nativeImage.createFromBuffer(Buffer.from(input.standard, "base64"), { scaleFactor: 1 });
+      image.addRepresentation({
+        scaleFactor: 2,
+        buffer: Buffer.from(input.retina, "base64"),
+      });
+      image.setTemplateImage(true);
+      return {
+        size: image.getSize(),
+        scaleFactors: image.getScaleFactors(),
+        template: image.isTemplateImage(),
+      };
+    }, {
+      standard: readFileSync(trayTemplatePath).toString("base64"),
+      retina: readFileSync(trayRetinaTemplatePath).toString("base64"),
+    });
+    expect(trayIconState.size).toEqual({ width: 16, height: 16 });
+    expect(trayIconState.scaleFactors).toEqual(expect.arrayContaining([1, 2]));
+    expect(trayIconState.template).toBe(true);
     await mainWindow.screenshot({ path: "/private/tmp/pinote-main-empty.png" });
 
     await mainWindow.locator(".main-create-button").click();

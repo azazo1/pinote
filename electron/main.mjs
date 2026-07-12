@@ -1,8 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Tray } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { NoteStore } from "./note-store.mjs";
+import { createTrayIcon } from "./tray-icon.mjs";
 import { WindowManager } from "./window-manager.mjs";
 import { SyncService } from "./sync-service.mjs";
 
@@ -181,7 +182,11 @@ function installTray() {
     const iconPath = app.isPackaged
       ? path.join(process.resourcesPath, "icon.png")
       : path.join(currentDir, "..", "build", "generated", "icon.png");
-    const source = trayIcon(iconPath);
+    const source = createTrayIcon({
+      templatePath: path.join(currentDir, "assets", "trayTemplate.png"),
+      retinaTemplatePath: path.join(currentDir, "assets", "trayTemplate@2x.png"),
+      appIconPath: iconPath,
+    });
     if (source.isEmpty()) {
       log.warn("系统托盘图标不可用", { iconPath });
       return;
@@ -222,20 +227,6 @@ function installTray() {
     windows.setTrayAvailable(false);
     log.error("创建系统托盘失败", error);
   }
-}
-
-function trayIcon(iconPath) {
-  if (process.platform === "darwin") {
-    const template = nativeImage.createFromNamedImage("NSImageNameBookmarksTemplate");
-    if (!template.isEmpty()) {
-      template.setTemplateImage(true);
-      return template;
-    }
-  }
-  const source = nativeImage.createFromPath(iconPath);
-  if (source.isEmpty()) return source;
-  const size = process.platform === "darwin" ? 18 : 20;
-  return source.resize({ width: size, height: size, quality: "best" });
 }
 
 function sanitizePatch(patch) {
