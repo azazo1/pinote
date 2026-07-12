@@ -2,7 +2,8 @@ name: pinote
 
 services:
   sync-server:
-    image: pinote-sync-server:local
+    image: ghcr.io/azazo1/pinote-sync-server:${PINOTE_IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "${PINOTE_PORT:-8787}:8787"

@@ -29,81 +29,73 @@ just dist-linux
 
 macOS 产物为 arm64 和 x64 DMG, Windows 产物为 x64 NSIS 安装器, Linux 产物为 x64 AppImage 和 deb. 文件统一写入 `release/`. 这些首版产物没有 Apple 公证或 Windows 代码签名, 安装时可能触发系统安全提示.
 
-日常开发可以运行 `just dist` 只构建当前平台的默认目标. GitHub Actions 会在 macOS, Windows 和 Ubuntu runner 上分别执行测试与原生打包, 不使用交叉编译.
+日常开发可以运行 `just dist` 只构建当前平台的默认目标. GitHub Actions 会在 macOS, Windows 和 Ubuntu runner 上分别执行测试与原生打包, 不使用交叉编译. 推送 `v*` tag 后会自动创建或更新 GitHub Release, 使用 tag 内容作为 Release notes, 并附加三个平台的安装包.
 
 ## 自托管同步
 
 同步服务使用 Rust, Axum 和 SQLite WAL. 服务提供 `/healthz` 和 `/readyz` 探针, 默认监听容器内的 `8787` 端口.
 
-### Compose 便携部署
+### Compose 快速部署
 
-仓库根目录的 `compose.yml` 使用 `./data` 保存 SQLite 数据, 使用 `./secrets/pinote-token` 保存访问令牌. 部署状态全部位于普通目录中, 可以直接备份或迁移, 不依赖 Docker 命名卷.
+仓库根目录的 `compose.yml` 直接使用 GHCR 中的 `ghcr.io/azazo1/pinote-sync-server:latest` 镜像. 服务器只需 Docker Compose 和这一个文件, 不需要克隆仓库, 安装 Rust 或手工导入镜像.
 
-首次构建需要完整仓库. 构建完成后可以导出镜像, 目标服务器不需要安装 Rust 或 Bun.
+GitHub Actions 在 `main` 分支通过检查后会发布 `latest` 及 commit SHA 标签. `v*` Git tag 还会发布完整版本号和主次版本号标签. 首次发布后, 仓库管理员需要在 GitHub Packages 的 package settings 中将该镜像设为 `Public`, 否则服务器需要先登录 GHCR.
+
+在服务器新建部署目录, 将 `compose.yml` 粘贴到其中, 然后创建数据目录和访问令牌.
 
 ```shell
 umask 077
 mkdir -p data secrets
-cp .env.example .env
 openssl rand -hex 32 > secrets/pinote-token
-docker compose -p pinote --env-file .env -f compose.yml config --quiet
-```
-
-Linux 服务器上的容器使用 UID `10001`. 首次启动前需要调整数据目录所有者. Docker Desktop 用户可以跳过这一步.
-
-```shell
 sudo chown -R 10001:10001 data
+docker compose config --quiet
+docker compose up -d
 ```
 
-构建本机架构的镜像并启动服务.
+容器使用 UID `10001`, 因此 Linux 服务器在首次启动前需要调整 `data` 目录所有者. Docker Desktop 用户可以跳过 `chown`. 默认对外端口是 `8787`, 数据和令牌分别位于 `./data` 和 `./secrets/pinote-token`.
 
-```shell
-docker build --file server/Dockerfile --tag pinote-sync-server:local .
-docker compose -p pinote --env-file .env -f compose.yml up -d
-```
+如果需要改变端口, 数据路径或镜像版本, 可在 Compose 项目目录中设置 `PINOTE_PORT`, `PINOTE_DATA_PATH` 或 `PINOTE_IMAGE_TAG`. 例如将 `PINOTE_IMAGE_TAG` 设为 `1.2.0` 可以固定部署版本, 避免跟随 `latest`.
 
 检查容器状态, 日志和就绪探针.
 
 ```shell
-docker compose -p pinote --env-file .env -f compose.yml ps
-docker compose -p pinote --env-file .env -f compose.yml logs --tail=100 sync-server
+docker compose ps
+docker compose logs --tail=100 sync-server
 curl --fail --show-error http://127.0.0.1:8787/readyz
 ```
 
-如果修改了 `.env` 中的 `PINOTE_PORT`, `curl` 和桌面客户端地址也需要使用新的宿主机端口. 远程客户端不能填写 `127.0.0.1`, 应填写服务器局域网地址或 HTTPS 域名.
+如果设置了其他 `PINOTE_PORT`, `curl` 和桌面客户端地址也需要使用新的宿主机端口. 远程客户端不能填写 `127.0.0.1`, 应填写服务器局域网地址或 HTTPS 域名.
 
 ### 迁移与备份
 
 迁移前先停止服务, 避免在 SQLite WAL 写入期间复制文件. 数据归档包含访问令牌, 应通过加密通道传输并限制读取权限.
 
 ```shell
-docker compose -p pinote --env-file .env -f compose.yml down
-docker save pinote-sync-server:local | gzip > pinote-sync-server-image.tar.gz
-sudo tar -czf pinote-sync-data.tar.gz compose.yml .env data secrets
+docker compose down
+sudo tar -czf pinote-sync-data.tar.gz compose.yml data secrets
 sudo chown "$(id -u):$(id -g)" pinote-sync-data.tar.gz
 chmod 600 pinote-sync-data.tar.gz
 ```
 
-在目标服务器解压数据并载入镜像, 然后使用 `--no-build` 启动. 解压后需要恢复部署文件和数据目录的所有者.
+在目标服务器解压数据后直接启动. 新服务器会自动从 GHCR 拉取镜像.
 
 ```shell
 sudo tar -xzf pinote-sync-data.tar.gz
-sudo chown "$(id -u):$(id -g)" compose.yml .env
+sudo chown "$(id -u):$(id -g)" compose.yml
 sudo chown -R "$(id -u):$(id -g)" secrets
-gzip -dc pinote-sync-server-image.tar.gz | docker load
 sudo chown -R 10001:10001 data
-docker compose -p pinote --env-file .env -f compose.yml up --no-build -d
+docker compose up -d
 ```
 
 确认新服务器就绪后再删除旧服务器的数据. `docker compose down` 不会删除 `./data`, 只有手动删除部署目录才会删除同步数据库.
 
 ### 更新与令牌轮换
 
-从仓库更新服务端后重新构建镜像和容器.
+使用 `latest` 时, 拉取 GHCR 中的新镜像并重建容器.
 
 ```shell
-docker build --file server/Dockerfile --tag pinote-sync-server:local .
-docker compose -p pinote --env-file .env -f compose.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 轮换令牌后需要强制重建服务容器, 并在每台桌面客户端中填写新令牌.
@@ -111,10 +103,18 @@ docker compose -p pinote --env-file .env -f compose.yml up -d
 ```shell
 umask 077
 openssl rand -hex 32 > secrets/pinote-token
-docker compose -p pinote --env-file .env -f compose.yml up -d --force-recreate sync-server
+docker compose up -d --force-recreate sync-server
 ```
 
-令牌文件只能包含令牌本身, 不要写成 `KEY=value`. 不要提交 `.env`, `data` 或 `secrets` 目录. 公网部署必须在服务前配置 HTTPS 反向代理和防火墙, 不应直接暴露明文 HTTP.
+令牌文件只能包含令牌本身, 不要写成 `KEY=value`. 不要提交本地环境变量文件, `data` 或 `secrets` 目录. 公网部署必须在服务前配置 HTTPS 反向代理和防火墙, 不应直接暴露明文 HTTP.
+
+### 本地容器构建
+
+需要从当前源码构建镜像时, 将 `compose.local.yml` 作为覆盖文件加载. 该文件会将 GHCR 镜像替换为本地构建的 `pinote-sync-server:local`.
+
+```shell
+docker compose -f compose.yml -f compose.local.yml up -d --build
+```
 
 ### 从源码直接运行
 

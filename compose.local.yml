@@ -1,0 +1,7 @@
+services:
+  sync-server:
+    image: pinote-sync-server:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: server/Dockerfile
