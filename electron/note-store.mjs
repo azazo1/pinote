@@ -69,7 +69,7 @@ export class NoteStore {
     this.state.notes.push(note);
     this.state.windows[note.id] = createWindowState({
       bounds: Number.isFinite(position.x) && Number.isFinite(position.y)
-        ? { x: position.x, y: position.y, width: 256, height: 220 }
+        ? { x: position.x, y: position.y, width: 253, height: 220 }
         : undefined,
     });
     void this.save();
@@ -267,7 +267,7 @@ function createWindowState(value = {}) {
   return normalizeWindowState({
     displayId: value.displayId,
     scaleFactor: value.scaleFactor,
-    bounds: value.bounds ?? { width: 256, height: 220 },
+    bounds: value.bounds ?? { width: 253, height: 220 },
     collapsed: value.collapsed,
     pinned: value.pinned,
     dockState: value.dockState,
@@ -282,7 +282,7 @@ function normalizeWindowState(value) {
     bounds: {
       x: Number.isFinite(bounds.x) ? bounds.x : undefined,
       y: Number.isFinite(bounds.y) ? bounds.y : undefined,
-      width: clamp(bounds.width, 240, 760, 256),
+      width: clamp(bounds.width, 253, 760, 253),
       height: clamp(bounds.height, 180, 900, 220),
     },
     collapsed: Boolean(value?.collapsed),

@@ -52,14 +52,23 @@ test("关键便签窗口流程", async () => {
     await window.getByLabel("新建便签").click();
     await expect.poll(() => app.windows().length).toBe(windowCount + 1);
 
+    await app.evaluate(({ BrowserWindow }, input) => {
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.url)?.setSize(input.width, input.height);
+    }, { url: window.url(), width: 360, height: 300 });
+    await expect.poll(() => window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 360, height: 300 });
     await window.locator(".title-bar").dblclick({ position: { x: 100, y: 8 } });
     await expect(shell).toHaveClass(/is-collapsed/);
     await window.waitForTimeout(150);
     const collapsedSize = await window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-    expect(collapsedSize.height).toBe(38);
+    expect(collapsedSize).toEqual({ width: 253, height: 22 });
     await window.screenshot({ path: "/private/tmp/pinote-collapsed.png" });
 
     await window.locator(".title-bar").dblclick({ position: { x: 100, y: 8 } });
+    await expect.poll(() => window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 360, height: 300 });
+    const resizable = await app.evaluate(({ BrowserWindow }, url) => {
+      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isResizable();
+    }, window.url());
+    expect(resizable).toBe(true);
     await window.getByLabel("侧边吸附便签组").click();
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(true);
     const shelf = app.windows().find((page) => page.url().includes("view=shelf"));

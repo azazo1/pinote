@@ -45,11 +45,11 @@ button {
   border-radius: 3px;
   box-shadow: 0 12px 28px rgb(44 40 20 / 18%);
   overflow: hidden;
-  transition: background-color 160ms ease;
+  transition: background-color 90ms ease;
 }
 
 .note-shell.is-collapsed {
-  grid-template-rows: 38px;
+  grid-template-rows: 22px;
 }
 
 .title-bar {
@@ -87,13 +87,13 @@ button {
 }
 
 .is-collapsed .title-bar .icon-button {
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
 }
 
 .is-collapsed .title-bar .icon-button svg {
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
 }
 
 .title-bar.uses-native-drag {
@@ -115,13 +115,13 @@ button {
   min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--note-ink) 96%, black);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 100ms ease;
+  transition: opacity 70ms ease;
 }
 
 .is-collapsed .collapsed-title {
@@ -147,7 +147,7 @@ button {
   border: 0;
   border-radius: 3px;
   cursor: pointer;
-  transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
+  transition: color 80ms ease, background-color 80ms ease, transform 80ms ease;
 }
 
 .icon-button:hover,
@@ -617,7 +617,7 @@ button {
   border-right: 0;
   border-radius: 18px 0 0 18px;
   box-shadow: 0 5px 12px rgb(25 25 22 / 18%);
-  transition: opacity 120ms ease;
+  transition: opacity 80ms ease;
 }
 
 .shelf-handle svg {
@@ -635,7 +635,7 @@ button {
   opacity: 0;
   pointer-events: none;
   transform: translateX(18px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: opacity 80ms ease, transform 80ms ease;
 }
 
 .shelf-shell.is-expanded .shelf-handle {
