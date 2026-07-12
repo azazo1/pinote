@@ -12,7 +12,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { emacsMotionTarget, type EmacsMotionKey } from "../editor/emacs-motion";
 import { markdownLinePreview, markdownTagDecorations, type MarkdownReplacement } from "../editor/markdown-preview";
 
@@ -20,6 +20,10 @@ interface NoteEditorProps {
   content: string;
   highlightedTags: string[];
   onChange: (content: string) => void;
+}
+
+export interface NoteEditorHandle {
+  focus: () => void;
 }
 
 const refreshMarkdownPreview = StateEffect.define<void>();
@@ -167,7 +171,10 @@ const emacsKeymap = [
   },
 ];
 
-export function NoteEditor({ content, highlightedTags, onChange }: NoteEditorProps) {
+export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEditor(
+  { content, highlightedTags, onChange },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -176,6 +183,10 @@ export function NoteEditor({ content, highlightedTags, onChange }: NoteEditorPro
 
   onChangeRef.current = onChange;
   highlightedTagsRef.current = highlightedTags;
+
+  useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
+  }), []);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -229,4 +240,4 @@ export function NoteEditor({ content, highlightedTags, onChange }: NoteEditorPro
   }, [highlightedTags]);
 
   return <div ref={hostRef} className="note-editor" />;
-}
+});

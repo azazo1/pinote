@@ -1,5 +1,5 @@
 import { Cloud, Folder, Hash, Plus, Power, Search, StickyNote, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MainNoteList } from "./components/MainNoteList";
 import { SyncPanel } from "./components/SyncPanel";
 import type { NoteSummary, SyncStatus } from "./types";
@@ -17,6 +17,7 @@ export default function MainApp() {
   const [quitting, setQuitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void noteAPI.listNotes().then(setNotes);
@@ -28,6 +29,15 @@ export default function MainApp() {
       offSync();
     };
   }, []);
+
+  useEffect(() => noteAPI.onCommand((command) => {
+    if (command === "focus-search") {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    } else if (command === "toggle-sync") {
+      setSyncOpen((open) => !open);
+    }
+  }), []);
 
   const groupOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -202,6 +212,7 @@ export default function MainApp() {
           <label className="main-search">
             <Search size={16} aria-hidden="true" />
             <input
+              ref={searchInputRef}
               type="search"
               value={query}
               placeholder="搜索标题, 内容, 分组或标签"

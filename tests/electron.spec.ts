@@ -9,6 +9,17 @@ test("主窗口和便签窗口关键流程", async () => {
     env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-e2e-${Date.now()}` },
   });
   try {
+    async function triggerShortcut(page: Page, id: string) {
+      await page.bringToFront();
+      await app.evaluate(({ BrowserWindow, Menu }, input) => {
+        const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.url);
+        const item = Menu.getApplicationMenu()?.getMenuItemById(input.id);
+        if (!target || !item?.click) throw new Error(`快捷键菜单项不可用: ${input.id}`);
+        target.focus();
+        item.click(item, target, {});
+      }, { id, url: page.url() });
+    }
+
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
     const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
     expect(mainWindow).toBeTruthy();
@@ -28,6 +39,40 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(mainWindow.locator(".main-shell")).toBeVisible();
     await expect(mainWindow.getByText("还没有便签")).toBeVisible();
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
+    const accelerators = await app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      const ids = [
+        "open-main-window",
+        "new-note",
+        "close-window",
+        "focus-title",
+        "focus-editor",
+        "toggle-collapse",
+        "toggle-pin",
+        "toggle-dock",
+        "toggle-color-picker",
+        "toggle-metadata",
+        "focus-search",
+        "toggle-sync",
+      ];
+      return Object.fromEntries(ids.map((id) => [id, menu?.getMenuItemById(id)?.accelerator]));
+    });
+    expect(accelerators).toEqual({
+      "open-main-window": "CommandOrControl+0",
+      "new-note": process.platform === "darwin" ? "Command+N" : "Control+Shift+N",
+      "close-window": "CommandOrControl+W",
+      "focus-title": "CommandOrControl+1",
+      "focus-editor": "CommandOrControl+2",
+      "toggle-collapse": "CommandOrControl+M",
+      "toggle-pin": "CommandOrControl+Shift+P",
+      "toggle-dock": "CommandOrControl+Shift+D",
+      "toggle-color-picker": "CommandOrControl+Shift+C",
+      "toggle-metadata": "CommandOrControl+Shift+T",
+      "focus-search": process.platform === "darwin" ? "Command+F" : "Control+Shift+F",
+      "toggle-sync": "CommandOrControl+,",
+    });
+    await triggerShortcut(mainWindow, "focus-search");
+    await expect(mainWindow.locator(".main-search input")).toBeFocused();
     const trayTemplatePath = path.resolve("electron/assets/trayTemplate.png");
     const trayRetinaTemplatePath = path.resolve("electron/assets/trayTemplate@2x.png");
     const trayIconState = await app.evaluate(({ nativeImage }, input) => {
@@ -70,6 +115,14 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(window.locator(".title-input")).toBeVisible();
     await expect(window.locator(".note-editor .cm-content")).toBeVisible();
     await expect(window.locator(".note-footer")).toBeVisible();
+    await triggerShortcut(window, "focus-title");
+    await expect(window.locator(".title-input")).toBeFocused();
+    await triggerShortcut(window, "focus-editor");
+    await expect(window.locator(".note-editor .cm-content")).toBeFocused();
+    await triggerShortcut(window, "toggle-color-picker");
+    await expect(window.locator(".color-picker")).toBeVisible();
+    await triggerShortcut(window, "toggle-color-picker");
+    await expect(window.locator(".color-picker")).toHaveCount(0);
 
     const workspaceState = await app.evaluate(({ BrowserWindow }, url) => {
       const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
@@ -186,7 +239,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(mainWindow.getByText("QA 便签")).toBeVisible();
     await window.screenshot({ path: "/private/tmp/pinote-expanded.png" });
 
-    await window.getByLabel("分组与标签").click();
+    await triggerShortcut(window, "toggle-metadata");
     const metadataPanel = window.locator(".note-metadata-panel");
     await expect(metadataPanel).toBeVisible();
     await metadataPanel.getByLabel("便签分组").fill("Work");
@@ -207,12 +260,12 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(mainWindow.locator(".main-note-group")).toHaveText("Work");
     await expect(mainWindow.locator(".main-note-tag")).toHaveCount(2);
 
-    await window.getByLabel("置顶").click();
+    await triggerShortcut(window, "toggle-pin");
     await expect(window.getByLabel("置顶")).toHaveClass(/is-active/);
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isAlwaysOnTop();
     }, window.url())).toBe(true);
-    await window.getByLabel("置顶").click();
+    await triggerShortcut(window, "toggle-pin");
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isAlwaysOnTop();
     }, window.url())).toBe(false);
@@ -228,8 +281,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await window.screenshot({ path: "/private/tmp/pinote-sync-panel.png" });
     await window.locator(".sync-panel").getByLabel("关闭", { exact: true }).click();
 
-    await window.getByLabel("便签操作").click();
-    await window.getByRole("menuitem", { name: "新建便签" }).click();
+    await triggerShortcut(window, "new-note");
     await expect.poll(() => app.windows().filter((page) => page.url().includes("noteId=")).length).toBe(2);
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
     let secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
@@ -305,14 +357,14 @@ test("主窗口和便签窗口关键流程", async () => {
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.url)?.setSize(input.width, input.height);
     }, { url: window.url(), width: 360, height: 300 });
     await expect.poll(() => window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 360, height: 300 });
-    await window.locator(".title-bar").dblclick({ position: { x: 100, y: 8 } });
+    await triggerShortcut(window, "toggle-collapse");
     await expect(shell).toHaveClass(/is-collapsed/);
     await window.waitForTimeout(150);
     const collapsedSize = await window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
     expect(collapsedSize).toEqual({ width: 253, height: 22 });
     await window.screenshot({ path: "/private/tmp/pinote-collapsed.png" });
 
-    await window.locator(".title-bar").dblclick({ position: { x: 100, y: 8 } });
+    await triggerShortcut(window, "toggle-collapse");
     await expect.poll(() => window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 360, height: 300 });
     const resizable = await app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isResizable();
@@ -330,8 +382,7 @@ test("主窗口和便签窗口关键流程", async () => {
       return note ? { revision: note.revision, modifiedAt: note.modifiedAt } : null;
     }, firstNoteId);
 
-    await window.getByLabel("便签操作").click();
-    await window.getByRole("menuitem", { name: "收纳到侧边" }).click();
+    await triggerShortcut(window, "toggle-dock");
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(true);
     const shelf = app.windows().find((page) => page.url().includes("view=shelf"));
     expect(shelf).toBeTruthy();
@@ -703,7 +754,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(false);
 
     const firstClosed = window.waitForEvent("close");
-    await window.getByLabel("关闭便签").click();
+    await triggerShortcut(window, "close-window");
     await firstClosed;
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
     const closedRow = mainWindow.locator(".main-note-row").filter({ hasText: "QA 便签" });
@@ -734,14 +785,11 @@ test("主窗口和便签窗口关键流程", async () => {
       const main = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
       return { visible: main?.isVisible(), minimized: main?.isMinimized(), destroyed: main?.isDestroyed() };
     }, mainWindow.url());
-    await app.evaluate(({ BrowserWindow }, url) => {
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.close();
-    }, mainWindow.url());
+    await triggerShortcut(mainWindow, "close-window");
     await expect.poll(readMainState).toMatchObject({ visible: false, minimized: false, destroyed: false });
     expect(mainWindow.isClosed()).toBe(false);
 
-    await reopenedWindow!.getByLabel("便签操作").click();
-    await reopenedWindow!.getByRole("menuitem", { name: "打开主窗口" }).click();
+    await triggerShortcut(reopenedWindow!, "open-main-window");
     await expect.poll(readMainState).toMatchObject({ visible: true, minimized: false, destroyed: false });
   } finally {
     await app.close();

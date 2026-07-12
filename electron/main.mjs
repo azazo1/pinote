@@ -193,14 +193,26 @@ function registerIpc() {
 }
 
 function installMenu() {
-  const sendCommand = (command) => BrowserWindow.getFocusedWindow()?.webContents.send("app:command", command);
+  const newNoteAccelerator = process.platform === "darwin" ? "Command+N" : "Control+Shift+N";
+  const focusSearchAccelerator = process.platform === "darwin" ? "Command+F" : "Control+Shift+F";
+  const sendCommand = (command) => (_menuItem, focusedWindow) => {
+    focusedWindow?.webContents.send("app:command", command);
+  };
+  const closeFocusedWindow = (_menuItem, focusedWindow) => {
+    if (!focusedWindow || focusedWindow === windows.shelfWindow) return;
+    if (focusedWindow === windows.mainWindow) {
+      focusedWindow.close();
+      return;
+    }
+    focusedWindow.webContents.send("app:command", "close-window");
+  };
   const template = [
     {
       label: "Pinote",
       submenu: [
         { label: "关于 Pinote", role: "about" },
         { type: "separator" },
-        { label: "打开主窗口", click: () => windows.openMainWindow() },
+        { id: "open-main-window", label: "打开主窗口", accelerator: "CommandOrControl+0", click: () => windows.openMainWindow() },
         { type: "separator" },
         { label: "隐藏 Pinote", role: "hide" },
         { label: "退出 Pinote", role: "quit" },
@@ -209,10 +221,24 @@ function installMenu() {
     {
       label: "便签",
       submenu: [
-        { label: "新建便签", accelerator: "CommandOrControl+N", click: () => windows.createNearFocused() },
-        { label: "收起或展开", accelerator: "CommandOrControl+M", click: () => sendCommand("toggle-collapse") },
+        { id: "new-note", label: "新建便签", accelerator: newNoteAccelerator, click: () => windows.createNearFocused() },
+        { id: "close-window", label: "关闭当前窗口", accelerator: "CommandOrControl+W", click: closeFocusedWindow },
         { type: "separator" },
-        { label: "切换当前便签的侧边收纳", accelerator: "CommandOrControl+Shift+D", click: () => sendCommand("toggle-dock") },
+        { id: "focus-title", label: "聚焦标题", accelerator: "CommandOrControl+1", click: sendCommand("focus-title") },
+        { id: "focus-editor", label: "聚焦正文", accelerator: "CommandOrControl+2", click: sendCommand("focus-editor") },
+        { id: "toggle-collapse", label: "收起或展开", accelerator: "CommandOrControl+M", click: sendCommand("toggle-collapse") },
+        { type: "separator" },
+        { id: "toggle-pin", label: "置顶或取消置顶", accelerator: "CommandOrControl+Shift+P", click: sendCommand("toggle-pin") },
+        { id: "toggle-dock", label: "切换当前便签的侧边收纳", accelerator: "CommandOrControl+Shift+D", click: sendCommand("toggle-dock") },
+        { id: "toggle-color-picker", label: "便签颜色", accelerator: "CommandOrControl+Shift+C", click: sendCommand("toggle-color-picker") },
+        { id: "toggle-metadata", label: "分组与标签", accelerator: "CommandOrControl+Shift+T", click: sendCommand("toggle-metadata") },
+      ],
+    },
+    {
+      label: "视图",
+      submenu: [
+        { id: "focus-search", label: "搜索便签", accelerator: focusSearchAccelerator, click: sendCommand("focus-search") },
+        { id: "toggle-sync", label: "同步设置", accelerator: "CommandOrControl+,", click: sendCommand("toggle-sync") },
       ],
     },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },

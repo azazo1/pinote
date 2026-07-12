@@ -58,6 +58,18 @@ export interface PlatformCapabilities {
   wayland: boolean;
 }
 
+export type AppCommand =
+  | "close-window"
+  | "focus-search"
+  | "focus-title"
+  | "focus-editor"
+  | "toggle-collapse"
+  | "toggle-pin"
+  | "toggle-dock"
+  | "toggle-color-picker"
+  | "toggle-metadata"
+  | "toggle-sync";
+
 export interface NoteAPI {
   getNote: (id: string) => Promise<{ note: Note | null; group: GroupState; capabilities: PlatformCapabilities }>;
   updateNote: (
@@ -93,7 +105,7 @@ export interface NoteAPI {
   syncNow: () => Promise<SyncStatus>;
   onCollapsed: (callback: (collapsed: boolean) => void) => () => void;
   onGroupState: (callback: (state: GroupState) => void) => () => void;
-  onCommand: (callback: (command: string) => void) => () => void;
+  onCommand: (callback: (command: AppCommand) => void) => () => void;
   onRemoteNote: (callback: (note: Note) => void) => () => void;
   onFlushRequested: (callback: () => Promise<void>) => () => void;
   onSyncStatus: (callback: (status: SyncStatus) => void) => () => void;

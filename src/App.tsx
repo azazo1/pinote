@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ColorPicker, noteColors } from "./components/ColorPicker";
 import { IconButton } from "./components/IconButton";
 import { InlineShelf } from "./components/InlineShelf";
-import { NoteEditor } from "./components/NoteEditor";
+import { NoteEditor, type NoteEditorHandle } from "./components/NoteEditor";
 import { NoteMetadataPanel } from "./components/NoteMetadataPanel";
 import { NoteMenu } from "./components/NoteMenu";
 import { SyncPanel } from "./components/SyncPanel";
@@ -40,6 +40,11 @@ export default function App() {
   const contentRevision = useRef(0);
   const manualTags = useRef<string[]>([]);
   const inlineTagsRef = useRef<string[]>([]);
+  const collapsedRef = useRef(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<NoteEditorHandle>(null);
+
+  collapsedRef.current = note?.collapsed ?? false;
 
   const setCurrentInlineTags = useCallback((tags: string[]) => {
     if (equalTags(inlineTagsRef.current, tags)) return;
@@ -176,6 +181,47 @@ export default function App() {
     });
   }, [noteId]);
 
+  const togglePinned = useCallback(() => {
+    setNote((current) => {
+      if (!current) return current;
+      const pinned = !current.pinned;
+      void window.noteAPI.setPinned(current.id, pinned);
+      return { ...current, pinned };
+    });
+  }, []);
+
+  const toggleColorPicker = useCallback(() => {
+    setMetadataOpen(false);
+    setSyncOpen(false);
+    setPickerOpen((open) => !open);
+  }, []);
+
+  const toggleMetadata = useCallback(() => {
+    setPickerOpen(false);
+    setSyncOpen(false);
+    setMetadataOpen((open) => !open);
+  }, []);
+
+  const toggleSync = useCallback(() => {
+    setPickerOpen(false);
+    setMetadataOpen(false);
+    setSyncOpen((open) => !open);
+  }, []);
+
+  const closeWindow = useCallback(() => {
+    void flushPendingPatch().then(() => window.noteAPI.closeNote(noteId));
+  }, [flushPendingPatch, noteId]);
+
+  const focusAfterExpand = useCallback((focus: () => void) => {
+    if (!collapsedRef.current) {
+      focus();
+      return;
+    }
+    void window.noteAPI.toggleCollapse(noteId).then(() => {
+      window.requestAnimationFrame(focus);
+    });
+  }, [noteId]);
+
   useEffect(() => {
     void window.noteAPI.getNote(noteId).then((result) => {
       const loaded = result.note;
@@ -203,8 +249,17 @@ export default function App() {
       } : current);
     });
     const offCommand = window.noteAPI.onCommand((command) => {
-      if (command === "toggle-collapse") toggleCollapse();
-      if (command === "toggle-dock") toggleDock();
+      switch (command) {
+        case "close-window": closeWindow(); break;
+        case "focus-title": focusAfterExpand(() => titleInputRef.current?.focus()); break;
+        case "focus-editor": focusAfterExpand(() => editorRef.current?.focus()); break;
+        case "toggle-collapse": toggleCollapse(); break;
+        case "toggle-pin": togglePinned(); break;
+        case "toggle-dock": toggleDock(); break;
+        case "toggle-color-picker": toggleColorPicker(); break;
+        case "toggle-metadata": toggleMetadata(); break;
+        case "toggle-sync": toggleSync(); break;
+      }
     });
     const offRemote = window.noteAPI.onRemoteNote((remote) => {
       const localPatch = mergePendingPatches(inFlightBatches.current, pendingPatch.current);
@@ -238,7 +293,20 @@ export default function App() {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
       void flushPendingPatch();
     };
-  }, [flushPendingPatch, noteId, queueContentPatch, setCurrentInlineTags, toggleCollapse, toggleDock]);
+  }, [
+    closeWindow,
+    flushPendingPatch,
+    focusAfterExpand,
+    noteId,
+    queueContentPatch,
+    setCurrentInlineTags,
+    toggleCollapse,
+    toggleColorPicker,
+    toggleDock,
+    toggleMetadata,
+    togglePinned,
+    toggleSync,
+  ]);
 
   if (!note) return <main className="loading-note" aria-label="正在加载" />;
 
@@ -265,20 +333,9 @@ export default function App() {
         title={note.title}
         pinned={note.pinned}
         colorPickerOpen={pickerOpen}
-        onToggleColorPicker={() => {
-          setMetadataOpen(false);
-          setPickerOpen((open) => !open);
-        }}
-        onTogglePinned={() => {
-          const pinned = !note.pinned;
-          setNote((current) => current ? { ...current, pinned } : current);
-          void window.noteAPI.setPinned(note.id, pinned);
-        }}
-        onClose={() => {
-          void flushPendingPatch().then(() => {
-            void window.noteAPI.closeNote(note.id);
-          });
-        }}
+        onToggleColorPicker={toggleColorPicker}
+        onTogglePinned={togglePinned}
+        onClose={closeWindow}
         onCollapse={toggleCollapse}
         nativeDrag={capabilities.wayland}
       />
@@ -307,13 +364,14 @@ export default function App() {
 
       <section className="note-content">
         <input
+          ref={titleInputRef}
           className="title-input"
           value={note.title}
           onChange={(event) => applyContentPatch({ title: event.target.value })}
           placeholder="标题"
           aria-label="标题"
         />
-        <NoteEditor content={note.markdown} highlightedTags={inlineTags} onChange={applyMarkdownPatch} />
+        <NoteEditor ref={editorRef} content={note.markdown} highlightedTags={inlineTags} onChange={applyMarkdownPatch} />
       </section>
 
       {inlineShelf && <InlineShelf activeId={note.id} />}
@@ -325,11 +383,7 @@ export default function App() {
             icon={Tags}
             label="分组与标签"
             active={metadataOpen}
-            onClick={() => {
-              setPickerOpen(false);
-              setSyncOpen(false);
-              setMetadataOpen((open) => !open);
-            }}
+            onClick={toggleMetadata}
           />
           <NoteMenu
             docked={docked}
