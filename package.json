@@ -107,6 +107,7 @@
       "icon": "build/generated/icons",
       "category": "Utility",
       "executableName": "pinote",
+      "maintainer": "Pinote contributors <noreply@pinote.dev>",
       "synopsis": "A focused desktop sticky note app",
       "description": "A focused desktop sticky note app with Markdown and Emacs key bindings",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
