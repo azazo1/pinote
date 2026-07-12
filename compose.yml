@@ -1,8 +1,7 @@
+name: pinote
+
 services:
   sync-server:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
     image: pinote-sync-server:local
     restart: unless-stopped
     ports:
@@ -10,9 +9,9 @@ services:
     environment:
       PINOTE_HOST: 0.0.0.0
       PINOTE_PORT: 8787
-      PINOTE_DATA_DIR: ${PINOTE_DATA_DIR:-/data}
+      PINOTE_DATA_DIR: /data
     volumes:
-      - pinote-data:${PINOTE_DATA_DIR:-/data}
+      - "${PINOTE_DATA_PATH:-./data}:/data"
     secrets:
       - pinote_token
     read_only: true
@@ -27,9 +26,6 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-
-volumes:
-  pinote-data:
 
 secrets:
   pinote_token:
