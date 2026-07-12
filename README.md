@@ -48,11 +48,13 @@ umask 077
 mkdir -p data secrets
 openssl rand -hex 32 > secrets/pinote-token
 sudo chown -R 10001:10001 data
+sudo chown 10001:10001 secrets/pinote-token
+sudo chmod 0400 secrets/pinote-token
 docker compose config --quiet
 docker compose up -d
 ```
 
-容器使用 UID `10001`, 因此 Linux 服务器在首次启动前需要调整 `data` 目录所有者. Docker Desktop 用户可以跳过 `chown`. 默认对外端口是 `8787`, 数据和令牌分别位于 `./data` 和 `./secrets/pinote-token`.
+容器使用 UID `10001`, 因此 Linux 服务器在首次启动前需要调整 `data` 目录和令牌文件的所有者. Docker Desktop 用户可以跳过 `chown`. 默认对外端口是 `8787`, 数据和令牌分别位于 `./data` 和 `./secrets/pinote-token`.
 
 如果需要改变端口, 数据路径或镜像版本, 可在 Compose 项目目录中设置 `PINOTE_PORT`, `PINOTE_DATA_PATH` 或 `PINOTE_IMAGE_TAG`. 例如将 `PINOTE_IMAGE_TAG` 设为 `1.2.0` 可以固定部署版本, 避免跟随 `latest`.
 
@@ -84,6 +86,8 @@ sudo tar -xzf pinote-sync-data.tar.gz
 sudo chown "$(id -u):$(id -g)" compose.yml
 sudo chown -R "$(id -u):$(id -g)" secrets
 sudo chown -R 10001:10001 data
+sudo chown 10001:10001 secrets/pinote-token
+sudo chmod 0400 secrets/pinote-token
 docker compose up -d
 ```
 
@@ -101,8 +105,9 @@ docker compose up -d
 轮换令牌后需要强制重建服务容器, 并在每台桌面客户端中填写新令牌.
 
 ```shell
-umask 077
-openssl rand -hex 32 > secrets/pinote-token
+openssl rand -hex 32 | sudo tee secrets/pinote-token > /dev/null
+sudo chown 10001:10001 secrets/pinote-token
+sudo chmod 0400 secrets/pinote-token
 docker compose up -d --force-recreate sync-server
 ```
 

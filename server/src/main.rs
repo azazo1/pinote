@@ -23,7 +23,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     init_tracing();
 
-    let token = tokio::fs::read_to_string(&cli.token_file).await?;
+    let token = tokio::fs::read_to_string(&cli.token_file)
+        .await
+        .map_err(|cause| {
+            io::Error::new(
+                cause.kind(),
+                format!(
+                    "无法读取令牌文件 {}: {cause}",
+                    cli.token_file.display()
+                ),
+            )
+        })?;
     let token = token.trim();
     if token.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "令牌文件不能为空").into());
