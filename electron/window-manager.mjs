@@ -181,7 +181,7 @@ export class WindowManager {
     const initialBounds = state.collapsed
       ? { ...bounds, x: bounds.x + bounds.width - COLLAPSED_WIDTH, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
       : bounds;
-    const window = new BrowserWindow({
+    const options = {
       ...initialBounds,
       minWidth: COLLAPSED_WIDTH,
       minHeight: state.collapsed ? COLLAPSED_HEIGHT : 180,
@@ -197,7 +197,12 @@ export class WindowManager {
       hasShadow: true,
       backgroundColor: "#00000000",
       webPreferences: rendererPreferences(),
-    });
+    };
+    if (process.platform === "darwin") {
+      options.type = "panel";
+      options.acceptFirstMouse = true;
+    }
+    const window = new BrowserWindow(options);
 
     this.windows.set(note.id, window);
     if (process.platform === "darwin") {
@@ -496,12 +501,6 @@ export class WindowManager {
     window.setMinimumSize(1, 1);
     window.setResizable(false);
     window.setAlwaysOnTop(true, process.platform === "darwin" ? "screen-saver" : "pop-up-menu");
-    if (process.platform === "darwin") {
-      window.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true,
-      });
-    }
   }
 
   finishNoteTransition(id, window) {
