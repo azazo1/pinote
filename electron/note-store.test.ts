@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { NoteStore } from "./note-store.mjs";
 
+function testStorePath() {
+  return path.join(tmpdir(), `pinote-store-${randomUUID()}`);
+}
+
 function testStore() {
-  return new NoteStore(`/private/tmp/pinote-store-${randomUUID()}`);
+  return new NoteStore(testStorePath());
 }
 
 describe("NoteStore", () => {
@@ -51,7 +57,7 @@ describe("NoteStore", () => {
   });
 
   it("tracks dock membership independently for each note", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const store = new NoteStore(dataPath);
     await store.load();
     const released = store.createNote();
@@ -102,7 +108,7 @@ describe("NoteStore", () => {
   });
 
   it("migrates version 4 group docking into per-note state", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const legacy = new NoteStore(dataPath);
     await legacy.load();
     const first = legacy.createNote();
@@ -124,7 +130,7 @@ describe("NoteStore", () => {
   });
 
   it("persists a closed note without deleting its content", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const first = new NoteStore(dataPath);
     await first.load();
     const note = first.createNote();
@@ -141,7 +147,7 @@ describe("NoteStore", () => {
   });
 
   it("persists a clamped shelf placement for each display", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const first = new NoteStore(dataPath);
     await first.load();
     const note = first.createNote();
@@ -161,7 +167,7 @@ describe("NoteStore", () => {
   });
 
   it("migrates a version 6 shelf position to the right edge", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const legacy = new NoteStore(dataPath);
     await legacy.load();
     legacy.state.version = 6;
@@ -395,7 +401,7 @@ describe("NoteStore", () => {
   });
 
   it("loads legacy notes with empty group and tags", async () => {
-    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const dataPath = testStorePath();
     const legacy = new NoteStore(dataPath);
     await legacy.load();
     const note = legacy.createNote();
