@@ -52,7 +52,7 @@ jobs:
         run: bun run test
 
       - name: Build installers
-        run: bun run ${{ matrix.script }}
+        run: bun run ${{ matrix.script }} --publish never
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
