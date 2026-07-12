@@ -50,6 +50,7 @@ export interface NoteAPI {
   listNotes: () => Promise<NoteSummary[]>;
   activateDockedNote: (id: string) => Promise<void>;
   setShelfExpanded: (expanded: boolean) => void;
+  moveShelf: (screenY: number) => void;
   getSyncSettings: () => Promise<SyncSettings>;
   getSyncStatus: () => Promise<SyncStatus>;
   configureSync: (settings: { url: string; token: string }) => Promise<SyncSettings>;

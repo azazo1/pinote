@@ -13,6 +13,7 @@ const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = 90;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 220;
+const SHELF_POSITION_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
 
@@ -25,9 +26,13 @@ export class WindowManager {
     this.shelfExpanded = false;
     this.activeDockedId = null;
     this.hideTimer = null;
+    this.shelfPositionSaveTimer = null;
     this.animations = new Map();
     this.animatingWindows = new Set();
     this.wayland = isWaylandSession();
+    this.trayAvailable = false;
+    this.quitting = false;
+    this.ignoreMainActivationUntil = 0;
 
     screen.on("display-removed", () => this.constrainAllWindows());
     screen.on("display-metrics-changed", () => this.constrainAllWindows());
@@ -35,6 +40,20 @@ export class WindowManager {
 
   getCapabilities() {
     return { platform: process.platform, wayland: this.wayland };
+  }
+
+  setTrayAvailable(available) {
+    this.trayAvailable = Boolean(available);
+  }
+
+  prepareToQuit() {
+    this.quitting = true;
+    clearTimeout(this.shelfPositionSaveTimer);
+    this.shelfPositionSaveTimer = null;
+  }
+
+  shouldOpenMainWindowOnActivate() {
+    return !this.quitting && Date.now() >= this.ignoreMainActivationUntil;
   }
 
   openMainWindow() {
@@ -65,6 +84,17 @@ export class WindowManager {
     window.webContents.on("render-process-gone", (_event, details) => {
       log.error("主窗口渲染进程退出", { reason: details.reason });
     });
+    window.on("close", (event) => {
+      if (this.quitting || !this.trayAvailable) return;
+      event.preventDefault();
+      this.ignoreMainActivationUntil = Date.now() + 350;
+      window.hide();
+      log.info("主窗口已隐藏到系统托盘");
+    });
+    if (process.platform === "win32") {
+      window.on("query-session-end", () => this.prepareToQuit());
+      window.on("session-end", () => this.prepareToQuit());
+    }
     window.on("closed", () => {
       if (this.mainWindow === window) this.mainWindow = null;
     });
@@ -102,8 +132,9 @@ export class WindowManager {
 
     this.windows.set(note.id, window);
     if (process.platform === "darwin") {
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
+    this.applyPinnedLevel(window, state.pinned);
     this.loadRenderer(window, { noteId: note.id });
 
     window.once("ready-to-show", () => {
@@ -241,10 +272,14 @@ export class WindowManager {
   setPinned(id, pinned) {
     const window = this.windows.get(id);
     if (!window) return;
-    window.setAlwaysOnTop(Boolean(pinned), "floating");
+    this.applyPinnedLevel(window, Boolean(pinned));
     this.store.updateWindow(id, { pinned: Boolean(pinned) });
     this.broadcastNoteList();
     log.info(pinned ? "便签已置顶" : "便签已取消置顶", { id });
+  }
+
+  applyPinnedLevel(window, pinned) {
+    window.setAlwaysOnTop(Boolean(pinned), "floating");
   }
 
   remove(id) {
@@ -299,14 +334,11 @@ export class WindowManager {
 
   ensureShelfWindow() {
     if (this.shelfWindow && !this.shelfWindow.isDestroyed()) return this.shelfWindow;
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    const area = display.workArea;
+    const display = this.findShelfDisplay();
+    const bounds = this.shelfBounds(display, false);
     const size = SHELF_COLLAPSED_SIZE;
     const options = {
-      x: area.x + area.width - size,
-      y: area.y + Math.round((area.height - size) / 2),
-      width: size,
-      height: size,
+      ...bounds,
       minWidth: size,
       minHeight: size,
       frame: false,
@@ -325,7 +357,7 @@ export class WindowManager {
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
     if (process.platform === "darwin") {
-      shelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+      shelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
     this.loadRenderer(shelf, { view: "shelf" });
     shelf.once("ready-to-show", () => shelf.showInactive());
@@ -339,19 +371,46 @@ export class WindowManager {
     if (!this.store.state.groupDocked || this.store.state.dockMode !== "shelf") return;
     clearTimeout(this.hideTimer);
     const shelf = this.ensureShelfWindow();
-    const display = screen.getDisplayMatching(shelf.getBounds());
-    const area = display.workArea;
-    const width = expanded ? SHELF_EXPANDED_WIDTH : SHELF_COLLAPSED_SIZE;
-    const height = expanded ? this.shelfExpandedHeight(area) : SHELF_COLLAPSED_SIZE;
-    const target = {
-      x: expanded ? area.x + area.width - width - SHELF_MARGIN : area.x + area.width - width,
-      y: area.y + Math.round((area.height - height) / 2),
-      width,
-      height,
-    };
+    const display = this.findShelfDisplay();
+    const target = this.shelfBounds(display, expanded);
     this.shelfExpanded = expanded;
     shelf.webContents.send("shelf:expanded", expanded);
     this.animateBounds(shelf, target, SHELF_ANIMATION_MS);
+  }
+
+  moveShelf(targetTop) {
+    if (!Number.isFinite(targetTop) || !this.store.state.groupDocked || this.store.state.dockMode !== "shelf") return false;
+    const shelf = this.ensureShelfWindow();
+    const current = shelf.getBounds();
+    const display = screen.getDisplayNearestPoint({
+      x: current.x + Math.round(current.width / 2),
+      y: Math.round(targetTop + current.height / 2),
+    });
+    const target = this.shelfBounds(display, this.shelfExpanded);
+    const area = display.workArea;
+    target.y = clampValue(Math.round(targetTop), area.y, area.y + area.height - target.height);
+    const normalizedCenter = clampValue(
+      (target.y + target.height / 2 - area.y) / area.height,
+      0,
+      1,
+    );
+    const previousDisplayId = this.store.state.shelf.displayId;
+    this.store.setShelfPosition(display.id, normalizedCenter, false);
+    this.scheduleShelfPositionSave();
+    this.cancelAnimation(shelf);
+    shelf.setBounds(target, false);
+    if (String(previousDisplayId) !== String(display.id)) {
+      log.info("侧边架已移动到显示器", { displayId: display.id });
+    }
+    return true;
+  }
+
+  scheduleShelfPositionSave() {
+    clearTimeout(this.shelfPositionSaveTimer);
+    this.shelfPositionSaveTimer = setTimeout(() => {
+      this.shelfPositionSaveTimer = null;
+      void this.store.save();
+    }, SHELF_POSITION_SAVE_DELAY_MS);
   }
 
   revealGroup() {
@@ -427,7 +486,7 @@ export class WindowManager {
         this.open(note);
         continue;
       }
-      window.setAlwaysOnTop(state.pinned, "floating");
+      this.applyPinnedLevel(window, state.pinned);
       window.webContents.send("note:remote", this.store.getRenderableNote(note.id));
       if (this.store.state.groupDocked && note.id !== this.activeDockedId) window.hide();
     }
@@ -446,7 +505,7 @@ export class WindowManager {
         : bounds;
       window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
       window.setResizable(!state.collapsed);
-      window.setAlwaysOnTop(state.pinned, "floating");
+      this.applyPinnedLevel(window, state.pinned);
       window.show();
       this.animateBounds(window, target);
     }
@@ -525,6 +584,32 @@ export class WindowManager {
     return screen.getPrimaryDisplay();
   }
 
+  findShelfDisplay() {
+    const displays = screen.getAllDisplays();
+    const savedId = this.store.state.shelf.displayId;
+    const saved = displays.find((display) => String(display.id) === String(savedId));
+    if (saved) return saved;
+    const fallback = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    this.store.setShelfPosition(fallback.id, this.store.getShelfPosition(fallback.id));
+    if (savedId !== null) log.info("侧边架显示器已恢复", { displayId: fallback.id });
+    return fallback;
+  }
+
+  shelfBounds(display, expanded) {
+    const area = display.workArea;
+    const width = Math.min(expanded ? SHELF_EXPANDED_WIDTH : SHELF_COLLAPSED_SIZE, area.width);
+    const desiredHeight = expanded ? this.shelfExpandedHeight(area) : SHELF_COLLAPSED_SIZE;
+    const height = Math.min(desiredHeight, area.height);
+    const normalizedCenter = this.store.getShelfPosition(display.id);
+    const centerY = area.y + normalizedCenter * area.height;
+    return {
+      x: Math.max(area.x, area.x + area.width - width - (expanded ? SHELF_MARGIN : 0)),
+      y: clampValue(Math.round(centerY - height / 2), area.y, area.y + area.height - height),
+      width,
+      height,
+    };
+  }
+
   clampBounds(bounds, area) {
     const width = Math.min(bounds.width ?? 253, area.width);
     const height = Math.min(bounds.height ?? 220, area.height);
@@ -600,4 +685,8 @@ function isWaylandSession() {
 
 function contains(bounds, point) {
   return point.x >= bounds.x && point.x <= bounds.x + bounds.width && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+}
+
+function clampValue(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }

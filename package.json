@@ -7,7 +7,7 @@
   "author": "Pinote contributors",
   "main": "electron/main.mjs",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "bun run icons && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc --noEmit && vite build --base=./",
     "icons": "bun scripts/generate-icons.mjs",
     "pack": "bun run build && bun run icons && electron-builder --dir",
@@ -15,7 +15,7 @@
     "dist:mac": "bun run build && bun run icons && electron-builder --mac dmg --x64 --arm64",
     "dist:win": "bun run build && bun run icons && electron-builder --win nsis --x64",
     "dist:linux": "bun run build && bun run icons && electron-builder --linux AppImage deb --x64",
-    "start": "electron .",
+    "start": "bun run icons && electron .",
     "test": "vitest run src electron --exclude tests/electron.spec.ts",
     "test:electron": "playwright test tests/electron.spec.ts --workers=1"
   },
@@ -60,6 +60,12 @@
       "electron/**/*",
       "!electron/**/*.test.*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/generated/icon.png",
+        "to": "icon.png"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",

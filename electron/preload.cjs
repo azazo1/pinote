@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   listNotes: () => ipcRenderer.invoke("notes:list"),
   activateDockedNote: (id) => ipcRenderer.invoke("group:activate-note", id),
   setShelfExpanded: (expanded) => ipcRenderer.send("shelf:set-expanded", expanded),
+  moveShelf: (screenY) => ipcRenderer.send("shelf:move", screenY),
   getSyncSettings: () => ipcRenderer.invoke("sync:get-settings"),
   getSyncStatus: () => ipcRenderer.invoke("sync:get-status"),
   configureSync: (settings) => ipcRenderer.invoke("sync:configure", settings),

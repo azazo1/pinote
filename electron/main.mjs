@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { NoteStore } from "./note-store.mjs";
 import { WindowManager } from "./window-manager.mjs";
@@ -8,9 +10,13 @@ log.initialize();
 log.transports.file.level = "info";
 log.transports.console.level = process.env.VITE_DEV_SERVER_URL ? "debug" : "info";
 
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+
 let store;
 let windows;
 let sync;
+let tray = null;
+let quitStarted = false;
 let quitReady = false;
 
 if (process.env.PINOTE_USER_DATA) app.setPath("userData", process.env.PINOTE_USER_DATA);
@@ -23,6 +29,7 @@ app.whenReady().then(async () => {
   sync = new SyncService(store, windows);
   registerIpc();
   installMenu();
+  installTray();
   windows.openMainWindow();
   for (const note of store.state.notes) {
     if (store.getWindowState(note.id).open) windows.open(note);
@@ -31,6 +38,7 @@ app.whenReady().then(async () => {
   sync.initialize();
 
   app.on("activate", () => {
+    if (quitStarted || !windows.shouldOpenMainWindowOnActivate()) return;
     windows.openMainWindow();
   });
 }).catch((error) => {
@@ -39,17 +47,32 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  const trayAvailable = tray && !tray.isDestroyed();
+  if (process.platform !== "darwin" && !trayAvailable) app.quit();
 });
 
 app.on("before-quit", (event) => {
   if (quitReady) return;
   event.preventDefault();
-  sync?.stop();
-  void Promise.resolve(store?.save()).finally(() => {
-    quitReady = true;
-    app.quit();
-  });
+  if (quitStarted) return;
+  quitStarted = true;
+  windows?.prepareToQuit();
+  void (async () => {
+    try {
+      await sync?.stop();
+      await store?.save();
+    } catch (error) {
+      log.error("退出前保存失败", error);
+    } finally {
+      quitReady = true;
+      app.quit();
+    }
+  })();
+});
+
+app.on("will-quit", () => {
+  tray?.destroy();
+  tray = null;
 });
 
 function registerIpc() {
@@ -99,6 +122,9 @@ function registerIpc() {
   ipcMain.handle("notes:list", () => store.listSummaries());
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
   ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
+  ipcMain.on("shelf:move", (_event, screenY) => {
+    if (Number.isFinite(screenY)) windows.moveShelf(screenY);
+  });
   ipcMain.handle("sync:get-settings", () => sync.getSettings());
   ipcMain.handle("sync:get-status", () => sync.getStatus());
   ipcMain.handle("sync:configure", (_event, settings) => sync.configure(settings));
@@ -131,6 +157,68 @@ function installMenu() {
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function installTray() {
+  try {
+    const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, "icon.png")
+      : path.join(currentDir, "..", "build", "generated", "icon.png");
+    const source = trayIcon(iconPath);
+    if (source.isEmpty()) {
+      log.warn("系统托盘图标不可用", { iconPath });
+      return;
+    }
+    tray = new Tray(source);
+    tray.setToolTip("Pinote");
+
+    const openMainWindow = () => {
+      if (quitStarted) return;
+      log.info("从系统托盘打开主窗口");
+      windows.openMainWindow();
+    };
+    const createNote = () => {
+      if (quitStarted) return;
+      const note = windows.createNearFocused();
+      sync.schedule();
+      log.info("从系统托盘新建便签", { id: note.id });
+    };
+    const quit = () => {
+      if (quitStarted) return;
+      log.info("从系统托盘退出 Pinote");
+      app.quit();
+    };
+    const menu = Menu.buildFromTemplate([
+      { label: "打开主窗口", click: openMainWindow },
+      { label: "新建便签", click: createNote },
+      { type: "separator" },
+      { label: "退出 Pinote", click: quit },
+    ]);
+
+    tray.on("click", openMainWindow);
+    if (process.platform === "darwin") tray.on("right-click", () => tray?.popUpContextMenu(menu));
+    else tray.setContextMenu(menu);
+    windows.setTrayAvailable(true);
+    log.info("系统托盘已就绪", { platform: process.platform });
+  } catch (error) {
+    tray = null;
+    windows.setTrayAvailable(false);
+    log.error("创建系统托盘失败", error);
+  }
+}
+
+function trayIcon(iconPath) {
+  if (process.platform === "darwin") {
+    const template = nativeImage.createFromNamedImage("NSImageNameBookmarksTemplate");
+    if (!template.isEmpty()) {
+      template.setTemplateImage(true);
+      return template;
+    }
+  }
+  const source = nativeImage.createFromPath(iconPath);
+  if (source.isEmpty()) return source;
+  const size = process.platform === "darwin" ? 18 : 20;
+  return source.resize({ width: size, height: size, quality: "best" });
 }
 
 function sanitizePatch(patch) {

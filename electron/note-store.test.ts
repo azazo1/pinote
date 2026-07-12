@@ -67,6 +67,26 @@ describe("NoteStore", () => {
     expect(restored.state.deleted).toEqual([]);
   });
 
+  it("persists a clamped shelf position for each display", async () => {
+    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const first = new NoteStore(dataPath);
+    await first.load();
+    const note = first.createNote();
+    const before = { revision: note.revision, modifiedAt: note.modifiedAt, dirty: note.dirty };
+
+    first.setShelfPosition(101, -0.4);
+    first.setShelfPosition(202, 0.76);
+    await first.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.getShelfPosition(101)).toBe(0);
+    expect(restored.getShelfPosition(202)).toBe(0.76);
+    expect(restored.state.shelf.displayId).toBe("202");
+    expect(restored.getNote(note.id)).toMatchObject(before);
+  });
+
   it("acknowledges an accepted content revision", async () => {
     const store = testStore();
     await store.load();

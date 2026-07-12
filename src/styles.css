@@ -672,11 +672,13 @@ button {
 
 .shelf-handle {
   position: absolute;
+  z-index: 2;
   top: 0;
   right: 0;
   bottom: 0;
   display: grid;
   width: 18px;
+  min-width: 18px;
   padding: 0;
   place-items: center;
   color: #55544f;
@@ -685,7 +687,15 @@ button {
   border-right: 0;
   border-radius: 18px 0 0 18px;
   box-shadow: 0 5px 12px rgb(25 25 22 / 18%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   transition: opacity 80ms ease;
+}
+
+.shelf-handle:focus-visible {
+  outline: 2px solid rgb(55 54 49 / 44%);
+  outline-offset: -2px;
 }
 
 .shelf-handle svg {
@@ -708,12 +718,26 @@ button {
 
 .shelf-shell.is-expanded .shelf-handle {
   opacity: 0;
+  pointer-events: none;
 }
 
 .shelf-shell.is-expanded .shelf-content {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0);
+}
+
+.shelf-shell.is-dragging,
+.shelf-shell.is-dragging .shelf-handle {
+  cursor: grabbing;
+}
+
+.shelf-shell.is-dragging .shelf-handle {
+  opacity: 1;
+  color: #33322e;
+  background: #cbc9c1;
+  pointer-events: auto;
+  box-shadow: 0 6px 15px rgb(25 25 22 / 26%);
 }
 
 .shelf-heading {

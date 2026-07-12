@@ -3,8 +3,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
 
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 const DEFAULT_COLOR = "lemon";
+const DEFAULT_SHELF_POSITION = 0.5;
 
 export class NoteStore {
   constructor(userDataPath) {
@@ -136,6 +137,22 @@ export class NoteStore {
     void this.save();
   }
 
+  getShelfPosition(displayId) {
+    const key = normalizeDisplayId(displayId);
+    if (key === null) return DEFAULT_SHELF_POSITION;
+    return this.state.shelf.positions[key] ?? DEFAULT_SHELF_POSITION;
+  }
+
+  setShelfPosition(displayId, normalizedPosition, persist = true) {
+    const key = normalizeDisplayId(displayId);
+    if (key === null || !Number.isFinite(normalizedPosition)) return null;
+    const position = clamp(normalizedPosition, 0, 1, DEFAULT_SHELF_POSITION);
+    this.state.shelf.displayId = key;
+    this.state.shelf.positions[key] = position;
+    if (persist) void this.save();
+    return position;
+  }
+
   setSyncSettings(url, encryptedToken) {
     this.state.sync = { url, encryptedToken };
     void this.save();
@@ -216,6 +233,7 @@ function createEmptyState() {
     deleted: [],
     groupDocked: false,
     dockMode: "shelf",
+    shelf: { displayId: null, positions: {} },
     sync: { url: "", encryptedToken: "" },
   };
 }
@@ -245,6 +263,7 @@ function normalizeState(value) {
     deleted: Array.isArray(value?.deleted) ? value.deleted.filter(isLocalDeletion).map((item) => ({ ...item, dirty: item.dirty !== false })) : [],
     groupDocked: Boolean(value?.groupDocked),
     dockMode: value?.dockMode === "inline" ? "inline" : "shelf",
+    shelf: normalizeShelfState(value?.shelf),
     sync: {
       url: typeof value?.sync?.url === "string" ? value.sync.url : "",
       encryptedToken: typeof value?.sync?.encryptedToken === "string" ? value.sync.encryptedToken : "",
@@ -293,6 +312,24 @@ function normalizeWindowState(value) {
     open: value?.open !== false,
     dockState: value?.dockState === "active" ? "active" : "free",
   };
+}
+
+function normalizeShelfState(value) {
+  const positions = Object.fromEntries(
+    Object.entries(value?.positions ?? {})
+      .filter(([displayId, position]) => normalizeDisplayId(displayId) !== null && Number.isFinite(position))
+      .map(([displayId, position]) => [displayId, clamp(position, 0, 1, DEFAULT_SHELF_POSITION)]),
+  );
+  return {
+    displayId: normalizeDisplayId(value?.displayId),
+    positions,
+  };
+}
+
+function normalizeDisplayId(value) {
+  if (Number.isInteger(value)) return String(value);
+  if (typeof value !== "string" || value.length === 0 || value.length > 32 || !/^-?\d+$/.test(value)) return null;
+  return value;
 }
 
 function clamp(value, min, max, fallback) {

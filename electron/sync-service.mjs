@@ -12,11 +12,14 @@ export class SyncService {
     this.timer = null;
     this.pendingTimer = null;
     this.running = null;
+    this.controller = null;
+    this.stopped = false;
     this.retryIndex = 0;
     this.status = { state: "idle", message: "同步未启用" };
   }
 
   initialize() {
+    this.stopped = false;
     const encrypted = this.store.state.sync.encryptedToken;
     if (encrypted) {
       try {
@@ -29,9 +32,24 @@ export class SyncService {
     else this.scheduleNext(NORMAL_INTERVAL_MS);
   }
 
-  stop() {
+  async stop() {
+    if (this.stopped) {
+      await this.running?.catch(() => {});
+      return;
+    }
+    this.stopped = true;
+    this.clearScheduled();
+    this.controller?.abort();
+    await this.running?.catch((error) => {
+      log.warn("等待同步停止时发生错误", { message: error instanceof Error ? error.message : "未知错误" });
+    });
+  }
+
+  clearScheduled() {
     clearTimeout(this.timer);
     clearTimeout(this.pendingTimer);
+    this.timer = null;
+    this.pendingTimer = null;
   }
 
   getSettings() {
@@ -47,6 +65,7 @@ export class SyncService {
   }
 
   async configure(settings) {
+    if (this.stopped) throw new Error("同步服务正在停止");
     const url = normalizeUrl(settings?.url);
     const nextToken = typeof settings?.token === "string" ? settings.token.trim() : "";
     if (url && !nextToken && !this.token) throw new Error("首次连接需要填写令牌");
@@ -63,7 +82,8 @@ export class SyncService {
     this.store.setSyncSettings(url, encryptedToken);
     this.retryIndex = 0;
     if (!url) {
-      this.stop();
+      this.clearScheduled();
+      this.controller?.abort();
       this.broadcast({ state: "idle", message: "同步未启用" });
       return this.getSettings();
     }
@@ -76,12 +96,13 @@ export class SyncService {
   }
 
   schedule() {
-    if (!this.isConfigured()) return;
+    if (this.stopped || !this.isConfigured()) return;
     clearTimeout(this.pendingTimer);
     this.pendingTimer = setTimeout(() => void this.syncNow().catch(() => {}), 750);
   }
 
   syncNow() {
+    if (this.stopped) return Promise.resolve(this.status);
     if (!this.isConfigured()) return Promise.resolve({ state: "idle", message: "同步未启用" });
     if (this.running) return this.running;
     clearTimeout(this.timer);
@@ -92,9 +113,17 @@ export class SyncService {
   }
 
   async performSync() {
+    if (this.stopped) return this.status;
     this.broadcast({ state: "syncing", message: "正在同步" });
     const startedAt = Date.now();
     const request = this.store.buildSyncRequest();
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
+    this.controller = controller;
     try {
       const response = await fetch(`${this.store.state.sync.url}/v1/sync`, {
         method: "POST",
@@ -103,10 +132,12 @@ export class SyncService {
           "content-type": "application/json",
         },
         body: JSON.stringify(request),
-        signal: AbortSignal.timeout(10_000),
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error(`服务器返回 ${response.status}`);
-      const result = this.store.applySyncResponse(await response.json());
+      const snapshot = await response.json();
+      if (this.stopped) return this.status;
+      const result = this.store.applySyncResponse(snapshot);
       this.windows.reconcileRemoteState();
       this.retryIndex = 0;
       this.scheduleNext(NORMAL_INTERVAL_MS);
@@ -124,7 +155,11 @@ export class SyncService {
       });
       return status;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
+      if (this.stopped || (!this.isConfigured() && isAbortError(error))) {
+        log.info("同步请求已停止", { durationMs: Date.now() - startedAt });
+        return this.status;
+      }
+      const message = timedOut ? "请求超时" : error instanceof Error ? error.message : "未知错误";
       const delay = RETRY_DELAYS_MS[Math.min(this.retryIndex, RETRY_DELAYS_MS.length - 1)];
       this.retryIndex += 1;
       this.scheduleNext(delay);
@@ -132,10 +167,14 @@ export class SyncService {
       this.broadcast(status);
       log.error("同步失败", { message, retryInMs: delay });
       throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (this.controller === controller) this.controller = null;
     }
   }
 
   scheduleNext(delay) {
+    if (this.stopped) return;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       if (this.isConfigured()) void this.syncNow().catch(() => {});
@@ -160,4 +199,8 @@ function canPersistToken() {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
   return safeStorage.getSelectedStorageBackend() !== "basic_text";
+}
+
+function isAbortError(error) {
+  return Boolean(error && typeof error === "object" && error.name === "AbortError");
 }
