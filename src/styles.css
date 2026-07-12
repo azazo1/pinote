@@ -702,6 +702,15 @@ button {
   text-indent: -16px;
 }
 
+.note-editor .cm-md-task-marker {
+  display: inline-flex;
+  align-items: center;
+  width: 16px;
+  height: 1lh;
+  text-indent: 0;
+  vertical-align: top;
+}
+
 .note-editor .cm-md-task-checkbox {
   appearance: none;
   -webkit-appearance: none;
@@ -710,14 +719,13 @@ button {
   width: 12px;
   height: 12px;
   padding: 0;
-  margin: 0 4px 0 0;
+  margin: 0;
   place-content: center;
   color: color-mix(in srgb, var(--note-ink) 50%, transparent);
   background: transparent;
   border: 1px solid currentColor;
   border-radius: 3px;
   box-shadow: none;
-  vertical-align: -1px;
   cursor: pointer;
   transition:
     color 80ms ease,

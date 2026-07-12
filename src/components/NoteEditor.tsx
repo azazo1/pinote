@@ -56,6 +56,9 @@ class TaskMarkerWidget extends WidgetType {
   }
 
   toDOM(view: EditorView) {
+    const marker = document.createElement("span");
+    marker.className = "cm-md-task-marker";
+
     const input = document.createElement("input");
     input.className = "cm-md-task-checkbox";
     input.type = "checkbox";
@@ -66,7 +69,8 @@ class TaskMarkerWidget extends WidgetType {
         changes: { from: this.checkFrom, to: this.checkFrom + 1, insert: input.checked ? "x" : " " },
       });
     });
-    return input;
+    marker.append(input);
+    return marker;
   }
 
   ignoreEvent() {

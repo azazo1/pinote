@@ -130,7 +130,7 @@ export function markdownLinePreview(text: string, offset: number, active: boolea
   let bodyFrom = 0;
 
   const heading = /^(#{1,3})[ \t]+/.exec(text);
-  const task = /^(\s*)[-+*][ \t]+\[([ xX])\][ \t]+/.exec(text);
+  const task = /^(\s*)[-+*][ \t]+\[([ xX])\][ \t]/.exec(text);
   const unordered = /^(\s*)[-+*][ \t]+/.exec(text);
   const ordered = /^(\s*)(\d+)[.)][ \t]+/.exec(text);
   const quote = /^(\s*)>[ \t]?/.exec(text);

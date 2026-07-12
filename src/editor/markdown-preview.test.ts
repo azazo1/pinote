@@ -44,6 +44,19 @@ describe("markdownLinePreview", () => {
     ]);
   });
 
+  it("keeps additional spaces after the task separator editable", () => {
+    const preview = markdownLinePreview("- [ ]   todo", 0, true);
+
+    expect(preview.decorations).toEqual([
+      {
+        kind: "replace",
+        from: 0,
+        to: 6,
+        replacement: { kind: "task", checked: false, checkFrom: 3 },
+      },
+    ]);
+  });
+
   it("does not interpret escaped inline markers", () => {
     const preview = markdownLinePreview("\\*literal*", 0, false);
 

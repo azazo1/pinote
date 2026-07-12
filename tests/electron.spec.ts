@@ -180,6 +180,15 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await window.locator(".title-input").fill("QA 便签");
     const editor = window.locator(".note-editor .cm-content");
+    await editor.fill("- [ ]");
+    await editor.press("End");
+    await editor.press("Space");
+    const firstSpaceCaretX = await window.evaluate(() => window.getSelection()?.getRangeAt(0).getBoundingClientRect().x);
+    await editor.press("Space");
+    const secondSpaceCaretX = await window.evaluate(() => window.getSelection()?.getRangeAt(0).getBoundingClientRect().x);
+    expect(firstSpaceCaretX).toBeDefined();
+    expect(secondSpaceCaretX).toBeDefined();
+    expect(secondSpaceCaretX).toBeGreaterThan((firstSpaceCaretX ?? 0) + 1);
     await editor.fill("# QA\n\n- [ ] item with enough content to wrap onto another line in a compact note\n\n**bold**\n\nTags #Rust");
     const flushSucceeded = await app.evaluate(({ BrowserWindow, ipcMain }, url) => new Promise<boolean>((resolve) => {
       const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
@@ -212,7 +221,11 @@ test("主窗口和便签窗口关键流程", async () => {
     const taskLine = window.locator(".cm-line").filter({ hasText: "item" });
     await taskLine.click();
     const taskCheckbox = taskLine.locator(".cm-md-task-checkbox");
+    const taskMarker = taskLine.locator(".cm-md-task-marker");
     await expect(taskCheckbox).toBeVisible();
+    await expect(taskMarker).toHaveCSS("display", "inline-flex");
+    await expect(taskMarker).toHaveCSS("align-items", "center");
+    await expect(taskMarker).toHaveCSS("width", "16px");
     await expect(taskCheckbox).toHaveCSS("appearance", "none");
     await expect(taskCheckbox).toHaveCSS("width", "12px");
     await expect(taskCheckbox).toHaveCSS("height", "12px");
