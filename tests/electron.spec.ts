@@ -25,6 +25,8 @@ test("主窗口和便签窗口关键流程", async () => {
     expect(window).toBeTruthy();
     if (!window) throw new Error("便签窗口未创建");
     const firstNoteUrl = window.url();
+    const firstNoteId = new URL(firstNoteUrl).searchParams.get("noteId");
+    if (!firstNoteId) throw new Error("便签 id 不存在");
     window.on("console", (message) => {
       if (message.type() === "error") console.error(`renderer console: ${message.text()}`);
     });
@@ -92,6 +94,47 @@ test("主窗口和便签窗口关键流程", async () => {
     const secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
     expect(secondWindow).toBeTruthy();
     if (!secondWindow) throw new Error("第二张便签窗口未创建");
+
+    const snapFixture = await app.evaluate(({ BrowserWindow, screen }, input) => {
+      const first = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.firstUrl);
+      const second = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.secondUrl);
+      if (!first || !second) throw new Error("磁吸测试窗口不存在");
+      const area = screen.getDisplayMatching(first.getBounds()).workArea;
+      const firstWidth = 360;
+      const firstHeight = 300;
+      const secondWidth = 253;
+      const secondHeight = 220;
+      const secondX = Math.min(area.x + 600, area.x + area.width - secondWidth - 30);
+      const targetY = Math.min(area.y + 140, area.y + area.height - firstHeight - 30);
+      first.setBounds({ x: secondX - firstWidth - 50, y: targetY + 40, width: firstWidth, height: firstHeight });
+      second.setBounds({ x: secondX, y: targetY, width: secondWidth, height: secondHeight });
+      return {
+        attachedX: secondX - firstWidth,
+        targetY,
+        nearX: secondX - firstWidth - 8,
+        nearY: targetY + 6,
+        freeX: secondX - firstWidth - 60,
+        freeY: targetY + 50,
+      };
+    }, { firstUrl: window.url(), secondUrl: secondWindow.url() });
+
+    await window.evaluate(({ id, x, y }) => window.noteAPI.moveWindow(id, x, y), {
+      id: firstNoteId,
+      x: snapFixture.nearX,
+      y: snapFixture.nearY,
+    });
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
+      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.getBounds();
+    }, window.url())).toMatchObject({ x: snapFixture.attachedX, y: snapFixture.targetY });
+
+    await window.evaluate(({ id, x, y }) => window.noteAPI.moveWindow(id, x, y), {
+      id: firstNoteId,
+      x: snapFixture.freeX,
+      y: snapFixture.freeY,
+    });
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
+      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.getBounds();
+    }, window.url())).toMatchObject({ x: snapFixture.freeX, y: snapFixture.freeY });
 
     await app.evaluate(({ BrowserWindow }, input) => {
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.url)?.setSize(input.width, input.height);

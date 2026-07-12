@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
+import { snapBounds } from "./windowing/snap-bounds.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const COLLAPSED_HEIGHT = 22;
@@ -266,7 +267,24 @@ export class WindowManager {
   move(id, x, y) {
     const window = this.windows.get(id);
     if (!window || this.store.state.groupDocked || this.wayland) return;
-    window.setPosition(Math.round(x), Math.round(y));
+    const current = window.getBounds();
+    const proposed = {
+      x: Math.round(x),
+      y: Math.round(y),
+      width: current.width,
+      height: current.height,
+    };
+    const display = screen.getDisplayMatching(proposed);
+    const targets = [];
+    for (const [otherId, otherWindow] of this.windows) {
+      if (otherId === id || otherWindow.isDestroyed() || !otherWindow.isVisible()) continue;
+      const bounds = otherWindow.getBounds();
+      const otherDisplay = screen.getDisplayMatching(bounds);
+      if (String(otherDisplay.id) !== String(display.id)) continue;
+      targets.push(bounds);
+    }
+    const snapped = snapBounds(proposed, targets, display.workArea);
+    window.setPosition(snapped.x, snapped.y);
   }
 
   setPinned(id, pinned) {
