@@ -60,9 +60,35 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await window.locator(".title-input").fill("QA 便签");
     const editor = window.locator(".note-editor .cm-content");
-    await editor.fill("# QA\n\n- [ ] item\n\n**bold**");
+    await editor.fill("# QA\n\n- [ ] item with enough content to wrap onto another line in a compact note\n\n**bold**");
     await expect(window.locator(".cm-md-heading-1")).toBeVisible();
-    await expect(window.locator(".cm-md-task-checkbox")).toBeVisible();
+    const taskLine = window.locator(".cm-line").filter({ hasText: "item" });
+    await taskLine.click();
+    const taskCheckbox = taskLine.locator(".cm-md-task-checkbox");
+    await expect(taskCheckbox).toBeVisible();
+    await expect(taskCheckbox).toHaveCSS("appearance", "none");
+    await expect(taskCheckbox).toHaveCSS("width", "12px");
+    await expect(taskCheckbox).toHaveCSS("height", "12px");
+    await expect(taskCheckbox).toHaveCSS("border-radius", "3px");
+    await expect(taskLine).toHaveCSS("padding-left", "16px");
+    await expect(taskLine).toHaveCSS("text-indent", "-16px");
+    await expect(taskLine).not.toContainText("- [ ]");
+    await window.screenshot({ path: "/private/tmp/pinote-task-unchecked.png" });
+    await taskCheckbox.click();
+    await expect(taskCheckbox).toBeChecked();
+    await expect(taskLine).toHaveCSS("text-decoration-line", "line-through");
+    await expect(taskLine).not.toContainText("- [x]");
+    await expect.poll(() => window.evaluate(async (id) => {
+      return (await window.noteAPI.getNote(id)).note?.markdown;
+    }, firstNoteId)).toContain("- [x] item");
+    await taskCheckbox.click();
+    await expect(taskCheckbox).not.toBeChecked();
+    await expect(taskLine).toHaveCSS("text-decoration-line", "none");
+    await expect.poll(() => window.evaluate(async (id) => {
+      return (await window.noteAPI.getNote(id)).note?.markdown;
+    }, firstNoteId)).toContain("- [ ] item");
+    await taskCheckbox.click();
+    await expect(taskCheckbox).toBeChecked();
     await expect(mainWindow.getByText("QA 便签")).toBeVisible();
     await window.screenshot({ path: "/private/tmp/pinote-expanded.png" });
 
@@ -94,6 +120,9 @@ test("主窗口和便签窗口关键流程", async () => {
     const secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
     expect(secondWindow).toBeTruthy();
     if (!secondWindow) throw new Error("第二张便签窗口未创建");
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
+      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
+    }, secondWindow.url())).toBe(true);
 
     const snapFixture = await app.evaluate(({ BrowserWindow, screen }, input) => {
       const first = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.firstUrl);

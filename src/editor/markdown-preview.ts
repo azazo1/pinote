@@ -122,20 +122,19 @@ export function markdownLinePreview(text: string, offset: number, active: boolea
     if (!active) decorations.push({ kind: "hide", from: offset, to: offset + bodyFrom });
   } else if (task) {
     const markerFrom = task[1].length;
+    const checked = task[2].toLowerCase() === "x";
     bodyFrom = task[0].length;
-    className = "cm-md-list-line cm-md-task-line";
-    if (!active) {
-      decorations.push({
-        kind: "replace",
-        from: offset + markerFrom,
-        to: offset + bodyFrom,
-        replacement: {
-          kind: "task",
-          checked: task[2].toLowerCase() === "x",
-          checkFrom: offset + task[0].indexOf("[") + 1,
-        },
-      });
-    }
+    className = `cm-md-list-line cm-md-task-line${checked ? " cm-md-task-complete" : ""}`;
+    decorations.push({
+      kind: "replace",
+      from: offset + markerFrom,
+      to: offset + bodyFrom,
+      replacement: {
+        kind: "task",
+        checked,
+        checkFrom: offset + task[0].indexOf("[") + 1,
+      },
+    });
   } else if (unordered) {
     const markerFrom = unordered[1].length;
     bodyFrom = unordered[0].length;

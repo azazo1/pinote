@@ -436,13 +436,79 @@ button {
   text-align: right;
 }
 
+.note-editor .cm-md-task-line {
+  padding-left: 16px;
+  text-indent: -16px;
+}
+
 .note-editor .cm-md-task-checkbox {
-  width: 1em;
-  height: 1em;
-  margin: 0 0.48em 0 0.08em;
-  vertical-align: -0.08em;
-  accent-color: var(--note-ink);
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  margin: 0 4px 0 0;
+  place-content: center;
+  color: color-mix(in srgb, var(--note-ink) 50%, transparent);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  box-shadow: none;
+  vertical-align: -1px;
   cursor: pointer;
+  transition:
+    color 80ms ease,
+    background-color 80ms ease;
+}
+
+.note-editor .cm-md-task-checkbox::after {
+  width: 3px;
+  height: 6px;
+  content: "";
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  opacity: 0;
+  transform: translateY(-0.5px) rotate(45deg) scale(0.8);
+  transition:
+    opacity 60ms ease,
+    transform 80ms ease;
+}
+
+.note-editor .cm-md-task-checkbox:hover {
+  background: color-mix(in srgb, var(--note-ink) 7%, transparent);
+}
+
+.note-editor .cm-md-task-checkbox:checked::after {
+  opacity: 1;
+  transform: translateY(-0.5px) rotate(45deg) scale(1);
+}
+
+.note-editor .cm-md-task-checkbox:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--note-ink) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.note-editor .cm-md-task-complete {
+  color: color-mix(in srgb, var(--note-ink) 36%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1px;
+}
+
+.note-editor .cm-md-task-complete .cm-md-task-checkbox {
+  color: color-mix(in srgb, var(--note-ink) 42%, transparent);
+}
+
+@media (forced-colors: active) {
+  .note-editor .cm-md-task-checkbox {
+    color: ButtonText;
+  }
+
+  .note-editor .cm-md-task-checkbox:checked {
+    color: Highlight;
+  }
 }
 
 .note-editor .cm-md-strong {
