@@ -10,6 +10,7 @@ export interface Note {
   collapsed: boolean;
   pinned: boolean;
   open: boolean;
+  dockState: DockState;
 }
 
 export interface NoteSummary {
@@ -20,12 +21,20 @@ export interface NoteSummary {
   modifiedAt: number;
   open: boolean;
   pinned: boolean;
+  dockState: DockState;
 }
 
+export type DockState = "free" | "shelf" | "inline";
+
 export interface GroupState {
-  docked: boolean;
   mode: "shelf" | "inline";
-  activeId?: string | null;
+  activeId: string | null;
+  dockedIds: string[];
+}
+
+export interface DockToggleResult {
+  note: Note | null;
+  group: GroupState;
 }
 
 export interface PlatformCapabilities {
@@ -44,9 +53,10 @@ export interface NoteAPI {
   toggleCollapse: (id: string) => Promise<void>;
   moveWindow: (id: string, x: number, y: number) => void;
   setPinned: (id: string, pinned: boolean) => Promise<void>;
-  toggleGroupDock: () => Promise<GroupState>;
+  toggleNoteDock: (id: string) => Promise<DockToggleResult>;
   revealGroup: () => void;
   hideGroup: () => void;
+  cancelGroupHide: () => void;
   listNotes: () => Promise<NoteSummary[]>;
   activateDockedNote: (id: string) => Promise<void>;
   setShelfExpanded: (expanded: boolean) => void;

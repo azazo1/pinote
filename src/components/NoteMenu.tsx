@@ -115,7 +115,7 @@ export function NoteMenu(props: NoteMenuProps) {
           <MenuItem icon={Plus} label="新建便签" onSelect={() => select(props.onCreate)} />
           <MenuItem
             icon={props.docked ? PanelRightOpen : PanelRightClose}
-            label={props.docked ? "取消侧边聚群" : "侧边聚群"}
+            label={props.docked ? "移出侧边" : "收纳到侧边"}
             onSelect={() => select(props.onToggleDock)}
           />
           <MenuItem icon={AppWindow} label="打开主窗口" onSelect={() => select(props.onOpenMainWindow)} />

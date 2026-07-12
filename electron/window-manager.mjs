@@ -13,7 +13,7 @@ const SHELF_MARGIN = 8;
 const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = 90;
 const ANIMATION_FRAME_MS = 16;
-const SHELF_HIDE_DELAY_MS = 220;
+const SHELF_HIDE_DELAY_MS = 700;
 const SHELF_POSITION_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
@@ -43,12 +43,27 @@ export class WindowManager {
     return { platform: process.platform, wayland: this.wayland };
   }
 
+  getDockMode() {
+    return this.wayland ? "inline" : "shelf";
+  }
+
+  getGroupState() {
+    const mode = this.getDockMode();
+    const dockedIds = this.store.listDockedNotes(mode).map((note) => note.id);
+    return {
+      mode,
+      activeId: dockedIds.includes(this.activeDockedId) ? this.activeDockedId : null,
+      dockedIds,
+    };
+  }
+
   setTrayAvailable(available) {
     this.trayAvailable = Boolean(available);
   }
 
   prepareToQuit() {
     this.quitting = true;
+    this.cancelHideGroup();
     clearTimeout(this.shelfPositionSaveTimer);
     this.shelfPositionSaveTimer = null;
   }
@@ -139,10 +154,12 @@ export class WindowManager {
     this.loadRenderer(window, { noteId: note.id });
 
     window.once("ready-to-show", () => {
-      if (!this.store.state.groupDocked) window.show();
+      if (!this.store.isDocked(note.id) || (this.getDockMode() === "inline" && this.activeDockedId === note.id)) {
+        window.show();
+      }
     });
     window.on("resize", () => this.persistBounds(note.id));
-    window.on("move", () => this.persistBounds(note.id));
+    window.on("move", () => this.handleWindowMove(note.id));
     window.on("closed", () => {
       this.cancelAnimation(window);
       if (this.windows.get(note.id) === window) this.windows.delete(note.id);
@@ -161,7 +178,7 @@ export class WindowManager {
     const window = this.open(note);
     const activate = () => {
       if (window.isDestroyed()) return;
-      if (this.store.state.groupDocked) {
+      if (this.store.isDocked(id)) {
         this.activateDockedNote(id);
       } else {
         window.show();
@@ -186,6 +203,7 @@ export class WindowManager {
         if (!window.isDestroyed()) window.close();
       });
     }
+    this.reconcileDockSurface();
     this.broadcastNoteList();
     this.sendGroupState();
     log.info("已关闭便签窗口", { id });
@@ -193,20 +211,32 @@ export class WindowManager {
   }
 
   restoreDockedMode() {
-    if (!this.store.state.groupDocked) return;
-    if (this.store.state.notes.length === 0) {
-      this.store.setGroupDocked(false, this.wayland ? "inline" : "shelf");
+    const mode = this.getDockMode();
+    for (const note of this.store.listDockedNotes()) {
+      if (note.dockState !== mode) this.store.setDockState(note.id, mode);
+    }
+    const dockedIds = this.store.listDockedNotes(mode).map((note) => note.id);
+    if (dockedIds.length === 0) {
+      this.destroyShelfWindow();
+      this.sendGroupState();
       return;
     }
-    const mode = this.wayland ? "inline" : "shelf";
-    this.store.setGroupDocked(true, mode);
     if (mode === "shelf") {
-      for (const window of this.windows.values()) window.hide();
+      this.activeDockedId = null;
+      for (const id of dockedIds) this.windows.get(id)?.hide();
       this.ensureShelfWindow();
     } else {
-      const firstId = this.windows.keys().next().value ?? null;
+      const firstId = dockedIds.find((id) => {
+        const window = this.windows.get(id);
+        return window && !window.isDestroyed();
+      }) ?? null;
       this.activeDockedId = firstId;
-      for (const [id, window] of this.windows) id === firstId ? window.show() : window.hide();
+      for (const id of dockedIds) {
+        const window = this.windows.get(id);
+        if (!window || window.isDestroyed()) continue;
+        if (id === firstId) window.showInactive();
+        else window.hide();
+      }
     }
     this.sendGroupState();
   }
@@ -218,11 +248,8 @@ export class WindowManager {
       x: bounds ? bounds.x + 28 : undefined,
       y: bounds ? bounds.y + 28 : undefined,
     });
-    const window = this.open(note);
+    this.open(note);
     this.broadcastNoteList();
-    if (this.store.state.groupDocked) {
-      window.once("ready-to-show", () => this.activateDockedNote(note.id));
-    }
     return note;
   }
 
@@ -232,9 +259,12 @@ export class WindowManager {
     if (!window) return;
     const bounds = window.getBounds();
     const collapsed = !state.collapsed;
+    const docked = this.store.isDocked(id);
     if (collapsed) {
       this.store.updateWindow(id, {
-        bounds: { ...bounds, height: Math.max(state.bounds.height, bounds.height) },
+        bounds: docked
+          ? { ...state.bounds, height: Math.max(state.bounds.height, bounds.height) }
+          : { ...bounds, height: Math.max(state.bounds.height, bounds.height) },
         collapsed: true,
       });
       window.setMinimumSize(COLLAPSED_WIDTH, COLLAPSED_HEIGHT);
@@ -253,7 +283,7 @@ export class WindowManager {
         width: state.bounds.width,
         height: state.bounds.height,
       };
-      this.store.updateWindow(id, { bounds: target, collapsed: false });
+      this.store.updateWindow(id, { bounds: docked ? state.bounds : target, collapsed: false });
       window.setResizable(true);
       this.animateBounds(window, target, WINDOW_ANIMATION_MS, () => {
         window.setMinimumSize(COLLAPSED_WIDTH, 180);
@@ -266,7 +296,8 @@ export class WindowManager {
 
   move(id, x, y) {
     const window = this.windows.get(id);
-    if (!window || this.store.state.groupDocked || this.wayland) return;
+    if (!window || window.isDestroyed() || this.wayland) return;
+    if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: false });
     const current = window.getBounds();
     const proposed = {
       x: Math.round(x),
@@ -278,6 +309,7 @@ export class WindowManager {
     const targets = [];
     for (const [otherId, otherWindow] of this.windows) {
       if (otherId === id || otherWindow.isDestroyed() || !otherWindow.isVisible()) continue;
+      if (this.store.isDocked(otherId)) continue;
       const bounds = otherWindow.getBounds();
       const otherDisplay = screen.getDisplayMatching(bounds);
       if (String(otherDisplay.id) !== String(display.id)) continue;
@@ -285,6 +317,20 @@ export class WindowManager {
     }
     const snapped = snapBounds(proposed, targets, display.workArea);
     window.setPosition(snapped.x, snapped.y);
+  }
+
+  handleWindowMove(id) {
+    const window = this.windows.get(id);
+    if (!window || window.isDestroyed()) return;
+    if (
+      this.wayland &&
+      this.store.getDockState(id) === "inline" &&
+      this.activeDockedId === id &&
+      !this.animatingWindows.has(window.id)
+    ) {
+      this.detachDockedNote(id, { restoreBounds: false });
+    }
+    this.persistBounds(id);
   }
 
   setPinned(id, pinned) {
@@ -306,51 +352,106 @@ export class WindowManager {
     window?.destroy();
     this.windows.delete(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
-    if (this.store.state.notes.length === 0 && this.store.state.groupDocked) this.leaveDockedMode();
+    this.reconcileDockSurface();
     this.broadcastNoteList();
+    this.sendGroupState();
   }
 
-  toggleGroupDock() {
-    if (!this.store.state.groupDocked && this.store.state.notes.length === 0) {
-      return { docked: false, mode: this.store.state.dockMode };
+  toggleNoteDock(id) {
+    if (!this.store.getNote(id)) return { note: null, group: this.getGroupState() };
+    if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: true });
+    else this.dockNote(id);
+    return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
+  }
+
+  dockNote(id) {
+    const note = this.store.getNote(id);
+    if (!note || this.store.isDocked(id)) return false;
+    let window = this.windows.get(id);
+    if (!window || window.isDestroyed()) {
+      this.store.updateWindow(id, { open: true });
+      window = this.open(note);
     }
-    const docked = !this.store.state.groupDocked;
-    if (docked) this.enterDockedMode();
-    else this.leaveDockedMode();
-    return { docked, mode: this.store.state.dockMode };
-  }
-
-  enterDockedMode() {
-    for (const id of this.windows.keys()) this.persistBounds(id, true);
-    const mode = this.wayland ? "inline" : "shelf";
-    this.store.setGroupDocked(true, mode);
-    const focused = BrowserWindow.getFocusedWindow();
-    this.activeDockedId = [...this.windows].find(([, window]) => window === focused)?.[0]
-      ?? this.windows.keys().next().value
-      ?? null;
-
+    this.persistBounds(id, true);
+    const mode = this.getDockMode();
+    this.store.setDockState(id, mode);
+    this.cancelHideGroup();
     if (mode === "shelf") {
-      for (const window of this.windows.values()) window.hide();
-      this.activeDockedId = null;
+      window.hide();
       this.ensureShelfWindow();
     } else {
-      for (const [id, window] of this.windows) id === this.activeDockedId ? window.show() : window.hide();
+      if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
+        this.windows.get(this.activeDockedId)?.hide();
+      }
+      this.activeDockedId = id;
+      window.show();
+      window.focus();
     }
+    this.broadcastNoteList();
     this.sendGroupState();
-    log.info("便签组已吸附", { mode });
+    if (mode === "shelf") this.scheduleHideGroup();
+    log.info("便签已加入侧边收纳", { id, mode });
+    return true;
   }
 
-  leaveDockedMode() {
-    this.store.setGroupDocked(false, this.wayland ? "inline" : "shelf");
-    this.activeDockedId = null;
-    if (this.shelfWindow && !this.shelfWindow.isDestroyed()) this.shelfWindow.destroy();
-    this.shelfWindow = null;
-    this.restoreSavedPositions();
+  detachDockedNote(id, { restoreBounds = true } = {}) {
+    const previousMode = this.store.getDockState(id);
+    if (previousMode !== "shelf" && previousMode !== "inline") return false;
+    const window = this.windows.get(id);
+    if (window && !window.isDestroyed()) this.cancelAnimation(window);
+    this.store.setDockState(id, "free");
+    if (this.activeDockedId === id) this.activeDockedId = null;
+    if (restoreBounds) this.restoreSavedPosition(id, true);
+    else if (window && !window.isDestroyed()) window.show();
+    this.reconcileDockSurface();
+    this.broadcastNoteList();
     this.sendGroupState();
-    log.info("便签组已离开侧边");
+    if (previousMode === "shelf" && this.store.listDockedNotes("shelf").length > 0) this.scheduleHideGroup();
+    log.info("便签已离开侧边收纳", { id, previousMode, restoreBounds });
+    return true;
+  }
+
+  reconcileDockSurface() {
+    const mode = this.getDockMode();
+    const dockedIds = this.store.listDockedNotes(mode).map((note) => note.id);
+    if (dockedIds.length === 0) {
+      this.activeDockedId = null;
+      this.destroyShelfWindow();
+      return;
+    }
+    if (mode === "shelf") {
+      if (!dockedIds.includes(this.activeDockedId)) this.activeDockedId = null;
+      this.ensureShelfWindow();
+      return;
+    }
+
+    this.destroyShelfWindow();
+    if (!dockedIds.includes(this.activeDockedId)) {
+      this.activeDockedId = dockedIds.find((id) => {
+        const window = this.windows.get(id);
+        return window && !window.isDestroyed();
+      }) ?? null;
+    }
+    for (const id of dockedIds) {
+      const window = this.windows.get(id);
+      if (!window || window.isDestroyed()) continue;
+      if (id === this.activeDockedId) window.showInactive();
+      else window.hide();
+    }
+  }
+
+  destroyShelfWindow() {
+    this.cancelHideGroup();
+    this.shelfExpanded = false;
+    const shelf = this.shelfWindow;
+    this.shelfWindow = null;
+    if (!shelf || shelf.isDestroyed()) return;
+    this.cancelAnimation(shelf);
+    shelf.destroy();
   }
 
   ensureShelfWindow() {
+    if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return null;
     if (this.shelfWindow && !this.shelfWindow.isDestroyed()) return this.shelfWindow;
     const display = this.findShelfDisplay();
     const bounds = this.shelfBounds(display, false);
@@ -378,7 +479,11 @@ export class WindowManager {
       shelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
     this.loadRenderer(shelf, { view: "shelf" });
-    shelf.once("ready-to-show", () => shelf.showInactive());
+    shelf.once("ready-to-show", () => {
+      if (this.shelfWindow === shelf && !shelf.isDestroyed() && this.store.listDockedNotes("shelf").length > 0) {
+        shelf.showInactive();
+      }
+    });
     shelf.on("closed", () => {
       if (this.shelfWindow === shelf) this.shelfWindow = null;
     });
@@ -386,9 +491,10 @@ export class WindowManager {
   }
 
   setShelfExpanded(expanded) {
-    if (!this.store.state.groupDocked || this.store.state.dockMode !== "shelf") return;
-    clearTimeout(this.hideTimer);
+    if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
+    this.cancelHideGroup();
     const shelf = this.ensureShelfWindow();
+    if (!shelf) return;
     const display = this.findShelfDisplay();
     const target = this.shelfBounds(display, expanded);
     this.shelfExpanded = expanded;
@@ -397,8 +503,12 @@ export class WindowManager {
   }
 
   moveShelf(targetTop) {
-    if (!Number.isFinite(targetTop) || !this.store.state.groupDocked || this.store.state.dockMode !== "shelf") return false;
+    if (!Number.isFinite(targetTop) || this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) {
+      return false;
+    }
+    this.cancelHideGroup();
     const shelf = this.ensureShelfWindow();
+    if (!shelf) return false;
     const current = shelf.getBounds();
     const display = screen.getDisplayNearestPoint({
       x: current.x + Math.round(current.width / 2),
@@ -432,25 +542,41 @@ export class WindowManager {
   }
 
   revealGroup() {
-    if (this.store.state.dockMode === "shelf") this.setShelfExpanded(true);
+    this.cancelHideGroup();
+    if (this.getDockMode() === "shelf") this.setShelfExpanded(true);
+  }
+
+  cancelHideGroup() {
+    clearTimeout(this.hideTimer);
+    this.hideTimer = null;
   }
 
   scheduleHideGroup() {
-    if (!this.store.state.groupDocked || this.store.state.dockMode !== "shelf") return;
-    clearTimeout(this.hideTimer);
+    if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
+    this.cancelHideGroup();
     this.hideTimer = setTimeout(() => {
+      this.hideTimer = null;
+      if (this.store.listDockedNotes("shelf").length === 0) {
+        this.destroyShelfWindow();
+        return;
+      }
       const cursor = screen.getCursorScreenPoint();
-      const visibleWindows = [this.shelfWindow, this.activeDockedId ? this.windows.get(this.activeDockedId) : null].filter(Boolean);
+      const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
+        ? this.windows.get(this.activeDockedId)
+        : null;
+      const visibleWindows = [this.shelfWindow, activeWindow].filter(Boolean);
       const hovered = visibleWindows.some((window) => !window.isDestroyed() && contains(window.getBounds(), cursor));
       if (hovered) return;
-      if (this.activeDockedId) this.windows.get(this.activeDockedId)?.hide();
+      activeWindow?.hide();
       this.activeDockedId = null;
       this.setShelfExpanded(false);
     }, SHELF_HIDE_DELAY_MS);
   }
 
   activateDockedNote(id) {
-    if (!this.store.state.groupDocked) return;
+    const mode = this.getDockMode();
+    if (this.store.getDockState(id) !== mode) return;
+    this.cancelHideGroup();
     let window = this.windows.get(id);
     if (!window || window.isDestroyed()) {
       const note = this.store.getNote(id);
@@ -461,9 +587,11 @@ export class WindowManager {
       this.broadcastNoteList();
       return this.store.getRenderableNote(id);
     }
-    if (this.activeDockedId && this.activeDockedId !== id) this.windows.get(this.activeDockedId)?.hide();
+    if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
+      this.windows.get(this.activeDockedId)?.hide();
+    }
     this.activeDockedId = id;
-    if (this.store.state.dockMode === "inline") {
+    if (mode === "inline") {
       window.show();
       window.focus();
       this.sendGroupState();
@@ -472,6 +600,7 @@ export class WindowManager {
 
     this.setShelfExpanded(true);
     const shelf = this.ensureShelfWindow();
+    if (!shelf) return;
     const display = screen.getDisplayMatching(shelf.getBounds());
     const state = this.store.getWindowState(id);
     const height = state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height;
@@ -506,39 +635,48 @@ export class WindowManager {
       }
       this.applyPinnedLevel(window, state.pinned);
       window.webContents.send("note:remote", this.store.getRenderableNote(note.id));
-      if (this.store.state.groupDocked && note.id !== this.activeDockedId) window.hide();
+      if (this.store.isDocked(note.id) && note.id !== this.activeDockedId) window.hide();
+      else if (!this.store.isDocked(note.id) && !window.isVisible()) window.showInactive();
     }
-    if (this.store.state.notes.length === 0 && this.store.state.groupDocked) this.leaveDockedMode();
+    this.reconcileDockSurface();
     this.broadcastNoteList();
     this.sendGroupState();
   }
 
   restoreSavedPositions() {
-    for (const [id, window] of this.windows) {
-      const state = this.store.getWindowState(id);
-      const display = this.findDisplay(state);
-      const bounds = this.clampBounds(state.bounds, display.workArea);
-      const target = state.collapsed
-        ? { ...bounds, x: bounds.x + bounds.width - COLLAPSED_WIDTH, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
-        : bounds;
-      window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
-      window.setResizable(!state.collapsed);
-      this.applyPinnedLevel(window, state.pinned);
-      window.show();
-      this.animateBounds(window, target);
+    for (const id of this.windows.keys()) {
+      if (!this.store.isDocked(id)) this.restoreSavedPosition(id);
     }
+  }
+
+  restoreSavedPosition(id, focus = false) {
+    const window = this.windows.get(id);
+    if (!window || window.isDestroyed() || this.store.isDocked(id)) return;
+    const state = this.store.getWindowState(id);
+    const display = this.findDisplay(state);
+    const bounds = this.clampBounds(state.bounds, display.workArea);
+    const target = state.collapsed
+      ? { ...bounds, x: bounds.x + bounds.width - COLLAPSED_WIDTH, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
+      : bounds;
+    window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
+    window.setResizable(!state.collapsed);
+    this.applyPinnedLevel(window, state.pinned);
+    window.show();
+    if (focus) window.focus();
+    this.animateBounds(window, target);
   }
 
   constrainAllWindows() {
-    if (this.store.state.groupDocked) {
-      if (this.store.state.dockMode === "shelf") this.setShelfExpanded(this.shelfExpanded);
-      return;
-    }
     this.restoreSavedPositions();
+    if (this.getDockMode() === "shelf" && this.store.listDockedNotes("shelf").length > 0) {
+      this.setShelfExpanded(this.shelfExpanded);
+    } else {
+      this.reconcileDockSurface();
+    }
   }
 
   persistBounds(id, force = false) {
-    if (this.store.state.groupDocked && !force) return;
+    if (this.store.isDocked(id) && !force) return;
     const window = this.windows.get(id);
     if (!window || window.isDestroyed()) return;
     if (this.animatingWindows.has(window.id) && !force) return;
@@ -642,20 +780,16 @@ export class WindowManager {
   }
 
   sendGroupState() {
-    this.broadcast("group:state", {
-      docked: this.store.state.groupDocked,
-      mode: this.store.state.dockMode,
-      activeId: this.activeDockedId,
-    });
+    this.broadcast("group:state", this.getGroupState());
   }
 
   broadcastNoteList() {
     this.broadcast("notes:list", this.store.listSummaries());
-    if (this.shelfExpanded) this.setShelfExpanded(true);
+    if (this.shelfExpanded && this.store.listDockedNotes("shelf").length > 0) this.setShelfExpanded(true);
   }
 
   shelfExpandedHeight(area) {
-    const desired = 42 + this.store.state.notes.length * 32;
+    const desired = 42 + this.store.listDockedNotes("shelf").length * 32;
     return Math.min(area.height - SHELF_MARGIN * 2, Math.max(110, Math.min(360, desired)));
   }
 

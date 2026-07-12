@@ -78,7 +78,7 @@ app.on("will-quit", () => {
 function registerIpc() {
   ipcMain.handle("note:get", (_event, id) => ({
     note: store.getRenderableNote(validId(id)),
-    group: { docked: store.state.groupDocked, mode: store.state.dockMode },
+    group: windows.getGroupState(),
     capabilities: windows.getCapabilities(),
   }));
   ipcMain.handle("note:update", (_event, id, patch) => {
@@ -116,9 +116,10 @@ function registerIpc() {
     if (Number.isFinite(x) && Number.isFinite(y)) windows.move(validId(id), x, y);
   });
   ipcMain.handle("window:set-pinned", (_event, id, pinned) => windows.setPinned(validId(id), Boolean(pinned)));
-  ipcMain.handle("group:toggle-dock", () => windows.toggleGroupDock());
+  ipcMain.handle("group:toggle-note-dock", (_event, id) => windows.toggleNoteDock(validId(id)));
   ipcMain.on("group:reveal", () => windows.revealGroup());
   ipcMain.on("group:hide", () => windows.scheduleHideGroup());
+  ipcMain.on("group:cancel-hide", () => windows.cancelHideGroup());
   ipcMain.handle("notes:list", () => store.listSummaries());
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
   ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
@@ -151,7 +152,7 @@ function installMenu() {
         { label: "新建便签", accelerator: "CommandOrControl+N", click: () => windows.createNearFocused() },
         { label: "收起或展开", accelerator: "CommandOrControl+M", click: () => sendCommand("toggle-collapse") },
         { type: "separator" },
-        { label: "侧边吸附", accelerator: "CommandOrControl+Shift+D", click: () => windows.toggleGroupDock() },
+        { label: "切换当前便签的侧边收纳", accelerator: "CommandOrControl+Shift+D", click: () => sendCommand("toggle-dock") },
       ],
     },
     { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },

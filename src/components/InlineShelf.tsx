@@ -16,12 +16,14 @@ export function InlineShelf({ activeId }: InlineShelfProps) {
     return window.noteAPI.onNoteList(setNotes);
   }, []);
 
+  const dockedNotes = notes.filter((note) => note.dockState === "inline");
+
   return (
     <aside className="inline-shelf" aria-label="便签列表">
-      <NoteList notes={notes} activeId={activeId} onSelect={(id) => void window.noteAPI.activateDockedNote(id)} />
+      <NoteList notes={dockedNotes} activeId={activeId} onSelect={(id) => void window.noteAPI.activateDockedNote(id)} />
       <div className="inline-shelf-actions">
         <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createNote()} />
-        <IconButton icon={PanelRightOpen} label="离开侧边聚群" onClick={() => void window.noteAPI.toggleGroupDock()} />
+        <IconButton icon={PanelRightOpen} label="移出侧边" onClick={() => void window.noteAPI.toggleNoteDock(activeId)} />
       </div>
     </aside>
   );

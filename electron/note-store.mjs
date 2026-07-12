@@ -3,9 +3,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
 
-const CURRENT_VERSION = 4;
+const CURRENT_VERSION = 5;
 const DEFAULT_COLOR = "lemon";
 const DEFAULT_SHELF_POSITION = 0.5;
+const DOCK_STATES = new Set(["free", "shelf", "inline"]);
 
 export class NoteStore {
   constructor(userDataPath) {
@@ -46,6 +47,7 @@ export class NoteStore {
       collapsed: windowState.collapsed,
       pinned: windowState.pinned,
       open: windowState.open,
+      dockState: windowState.dockState,
     };
   }
 
@@ -59,8 +61,30 @@ export class NoteStore {
         modifiedAt: note.modifiedAt,
         open: this.getWindowState(note.id).open,
         pinned: this.getWindowState(note.id).pinned,
+        dockState: this.getWindowState(note.id).dockState,
       }))
       .sort((left, right) => right.modifiedAt - left.modifiedAt);
+  }
+
+  getDockState(id) {
+    if (!this.getNote(id)) return null;
+    return this.getWindowState(id).dockState;
+  }
+
+  isDocked(id) {
+    const dockState = this.getDockState(id);
+    return dockState === "shelf" || dockState === "inline";
+  }
+
+  listDockedNotes(mode) {
+    const dockState = mode === "shelf" || mode === "inline" ? mode : null;
+    if (mode !== undefined && dockState === null) return [];
+    return this.state.notes
+      .filter((note) => {
+        const state = this.getWindowState(note.id).dockState;
+        return dockState === null ? state !== "free" : state === dockState;
+      })
+      .map((note) => this.getRenderableNote(note.id));
   }
 
   createNote(position = {}) {
@@ -114,6 +138,11 @@ export class NoteStore {
     return this.state.windows[id];
   }
 
+  setDockState(id, dockState) {
+    if (!this.getNote(id) || !DOCK_STATES.has(dockState)) return null;
+    return this.updateWindow(id, { dockState });
+  }
+
   deleteNote(id) {
     const note = this.getNote(id);
     if (!note) return false;
@@ -129,12 +158,6 @@ export class NoteStore {
     void this.save();
     log.info("已删除便签", { id, baseRevision: note.revision });
     return true;
-  }
-
-  setGroupDocked(docked, mode = "shelf") {
-    this.state.groupDocked = Boolean(docked);
-    this.state.dockMode = mode;
-    void this.save();
   }
 
   getShelfPosition(displayId) {
@@ -231,8 +254,6 @@ function createEmptyState() {
     notes: [],
     windows: {},
     deleted: [],
-    groupDocked: false,
-    dockMode: "shelf",
     shelf: { displayId: null, positions: {} },
     sync: { url: "", encryptedToken: "" },
   };
@@ -245,14 +266,20 @@ function normalizeState(value) {
     ? value.notes.map((note) => normalizeContentNote({ ...note, markdown: note.markdown ?? note.content }, deviceId))
     : [];
   const windows = {};
+  const legacyDockState = value?.version === 4 && value?.groupDocked === true
+    ? value?.dockMode === "inline" ? "inline" : "shelf"
+    : null;
   for (const note of notes) {
     const legacy = value?.notes?.find?.((item) => item.id === note.id) ?? {};
-    windows[note.id] = normalizeWindowState(value?.windows?.[note.id] ?? {
-      bounds: Number.isFinite(legacy.x) && Number.isFinite(legacy.y)
-        ? { x: legacy.x, y: legacy.y, width: legacy.width, height: legacy.height }
-        : undefined,
-      collapsed: legacy.collapsed,
-      pinned: legacy.pinned,
+    windows[note.id] = normalizeWindowState({
+      ...(value?.windows?.[note.id] ?? {
+        bounds: Number.isFinite(legacy.x) && Number.isFinite(legacy.y)
+          ? { x: legacy.x, y: legacy.y, width: legacy.width, height: legacy.height }
+          : undefined,
+        collapsed: legacy.collapsed,
+        pinned: legacy.pinned,
+      }),
+      dockState: legacyDockState ?? value?.windows?.[note.id]?.dockState,
     });
   }
   return {
@@ -261,8 +288,6 @@ function normalizeState(value) {
     notes,
     windows,
     deleted: Array.isArray(value?.deleted) ? value.deleted.filter(isLocalDeletion).map((item) => ({ ...item, dirty: item.dirty !== false })) : [],
-    groupDocked: Boolean(value?.groupDocked),
-    dockMode: value?.dockMode === "inline" ? "inline" : "shelf",
     shelf: normalizeShelfState(value?.shelf),
     sync: {
       url: typeof value?.sync?.url === "string" ? value.sync.url : "",
@@ -310,8 +335,12 @@ function normalizeWindowState(value) {
     collapsed: Boolean(value?.collapsed),
     pinned: Boolean(value?.pinned),
     open: value?.open !== false,
-    dockState: value?.dockState === "active" ? "active" : "free",
+    dockState: normalizeDockState(value?.dockState),
   };
+}
+
+function normalizeDockState(value, fallback = "free") {
+  return DOCK_STATES.has(value) ? value : fallback;
 }
 
 function normalizeShelfState(value) {

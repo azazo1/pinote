@@ -1,4 +1,4 @@
-import { NotebookTabs, PanelRightOpen, Plus } from "lucide-react";
+import { NotebookTabs, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { IconButton } from "./components/IconButton";
 import { NoteList } from "./components/NoteList";
@@ -35,12 +35,15 @@ export default function ShelfApp() {
   }
 
   function scheduleExpand() {
+    window.noteAPI.cancelGroupHide();
     if (drag.current || expanded || hoverTimer.current !== null) return;
     hoverTimer.current = window.setTimeout(() => {
       hoverTimer.current = null;
       if (!drag.current) expandShelf();
     }, 140);
   }
+
+  const dockedNotes = notes.filter((note) => note.dockState === "shelf");
 
   function clearDrag(forceSuppressClick = false) {
     const current = drag.current;
@@ -157,10 +160,9 @@ export default function ShelfApp() {
           <strong>Pinote</strong>
           <div className="shelf-actions">
             <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createNote()} />
-            <IconButton icon={PanelRightOpen} label="离开侧边聚群" onClick={() => void window.noteAPI.toggleGroupDock()} />
           </div>
         </div>
-        <NoteList notes={notes} onSelect={(id) => void window.noteAPI.activateDockedNote(id)} />
+        <NoteList notes={dockedNotes} onSelect={(id) => void window.noteAPI.activateDockedNote(id)} />
       </section>
     </main>
   );

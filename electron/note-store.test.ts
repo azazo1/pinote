@@ -50,6 +50,79 @@ describe("NoteStore", () => {
     await store.save();
   });
 
+  it("tracks dock membership independently for each note", async () => {
+    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const store = new NoteStore(dataPath);
+    await store.load();
+    const released = store.createNote();
+    const docked = store.createNote();
+    const before = { revision: released.revision, modifiedAt: released.modifiedAt, dirty: released.dirty };
+
+    store.setDockState(released.id, "shelf");
+    store.setDockState(docked.id, "shelf");
+    store.setDockState(released.id, "free");
+
+    expect(store.getNote(released.id)).toMatchObject(before);
+    expect(store.getDockState(released.id)).toBe("free");
+    expect(store.getDockState(docked.id)).toBe("shelf");
+    expect(store.isDocked(released.id)).toBe(false);
+    expect(store.isDocked(docked.id)).toBe(true);
+    expect(store.listDockedNotes()).toEqual([
+      expect.objectContaining({ id: docked.id, dockState: "shelf" }),
+    ]);
+    expect(store.listSummaries()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: released.id, dockState: "free" }),
+      expect.objectContaining({ id: docked.id, dockState: "shelf" }),
+    ]));
+    expect(store.buildSyncRequest().changes[0]).not.toHaveProperty("dockState");
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.getDockState(released.id)).toBe("free");
+    expect(restored.getDockState(docked.id)).toBe("shelf");
+  });
+
+  it("validates dock state changes and supports mode filtering", async () => {
+    const store = testStore();
+    await store.load();
+    const shelf = store.createNote();
+    const inline = store.createNote();
+
+    store.setDockState(shelf.id, "shelf");
+    store.setDockState(inline.id, "inline");
+
+    expect(store.setDockState(shelf.id, "active")).toBeNull();
+    expect(store.getDockState(shelf.id)).toBe("shelf");
+    expect(store.listDockedNotes("shelf").map((note) => note.id)).toEqual([shelf.id]);
+    expect(store.listDockedNotes("inline").map((note) => note.id)).toEqual([inline.id]);
+    expect(store.listDockedNotes("active")).toEqual([]);
+    await store.save();
+  });
+
+  it("migrates version 4 group docking into per-note state", async () => {
+    const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
+    const legacy = new NoteStore(dataPath);
+    await legacy.load();
+    const first = legacy.createNote();
+    const second = legacy.createNote();
+    legacy.state.version = 4;
+    legacy.state.groupDocked = true;
+    legacy.state.dockMode = "inline";
+    await legacy.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.state.version).toBe(5);
+    expect(restored.state).not.toHaveProperty("groupDocked");
+    expect(restored.state).not.toHaveProperty("dockMode");
+    expect(restored.getDockState(first.id)).toBe("inline");
+    expect(restored.getDockState(second.id)).toBe("inline");
+    expect(restored.listDockedNotes("inline").map((note) => note.id)).toEqual([first.id, second.id]);
+  });
+
   it("persists a closed note without deleting its content", async () => {
     const dataPath = `/private/tmp/pinote-store-${randomUUID()}`;
     const first = new NoteStore(dataPath);

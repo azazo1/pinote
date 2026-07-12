@@ -6,13 +6,12 @@ import { NoteMenu } from "./components/NoteMenu";
 import { SyncPanel } from "./components/SyncPanel";
 import { TitleBar } from "./components/TitleBar";
 import { dateLabel } from "./lib/date-label";
-import type { GroupState, Note, PlatformCapabilities, SyncStatus } from "./types";
+import type { Note, PlatformCapabilities, SyncStatus } from "./types";
 
 export default function App() {
   const noteId = useMemo(() => new URLSearchParams(window.location.search).get("noteId") ?? "", []);
   const [note, setNote] = useState<Note | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [group, setGroup] = useState<GroupState>({ docked: false, mode: "shelf" });
   const [capabilities, setCapabilities] = useState<PlatformCapabilities>({ platform: "darwin", wayland: false });
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
@@ -42,17 +41,28 @@ export default function App() {
     void window.noteAPI.toggleCollapse(noteId);
   }, [noteId]);
 
+  const toggleDock = useCallback(() => {
+    void window.noteAPI.toggleNoteDock(noteId).then((result) => {
+      setNote(result.note);
+    });
+  }, [noteId]);
+
   useEffect(() => {
     void window.noteAPI.getNote(noteId).then((result) => {
       setNote(result.note);
-      setGroup(result.group);
       setCapabilities(result.capabilities);
     });
     void window.noteAPI.getSyncStatus().then(setSyncStatus);
     const offCollapsed = window.noteAPI.onCollapsed((collapsed) => setNote((current) => current ? { ...current, collapsed } : current));
-    const offGroup = window.noteAPI.onGroupState(setGroup);
+    const offGroup = window.noteAPI.onGroupState((state) => {
+      setNote((current) => current ? {
+        ...current,
+        dockState: state.dockedIds.includes(current.id) ? state.mode : "free",
+      } : current);
+    });
     const offCommand = window.noteAPI.onCommand((command) => {
       if (command === "toggle-collapse") toggleCollapse();
+      if (command === "toggle-dock") toggleDock();
     });
     const offRemote = window.noteAPI.onRemoteNote((remote) => {
       setNote({ ...remote, ...pendingPatch.current });
@@ -67,7 +77,7 @@ export default function App() {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
       void flushPendingPatch();
     };
-  }, [flushPendingPatch, noteId, toggleCollapse]);
+  }, [flushPendingPatch, noteId, toggleCollapse, toggleDock]);
 
   if (!note) return <main className="loading-note" aria-label="正在加载" />;
 
@@ -77,14 +87,15 @@ export default function App() {
     "--note-bar": palette.bar,
     "--note-ink": palette.ink,
   } as React.CSSProperties;
-  const inlineShelf = group.docked && group.mode === "inline";
+  const docked = note.dockState !== "free";
+  const inlineShelf = note.dockState === "inline";
 
   return (
     <main
       className={`note-shell${note.collapsed ? " is-collapsed" : ""}${inlineShelf ? " has-inline-shelf" : ""}`}
       style={style}
-      onMouseEnter={() => window.noteAPI.revealGroup()}
-      onMouseLeave={() => window.noteAPI.hideGroup()}
+      onMouseEnter={docked ? () => window.noteAPI.revealGroup() : undefined}
+      onMouseLeave={docked ? () => window.noteAPI.hideGroup() : undefined}
     >
       <TitleBar
         noteId={note.id}
@@ -135,9 +146,9 @@ export default function App() {
         <time dateTime={new Date(note.modifiedAt).toISOString()}>{dateLabel(note.modifiedAt)}</time>
         <div className="footer-actions">
           <NoteMenu
-            docked={group.docked}
+            docked={docked}
             onCreate={() => void window.noteAPI.createNote()}
-            onToggleDock={() => void window.noteAPI.toggleGroupDock().then(setGroup)}
+            onToggleDock={toggleDock}
             onOpenMainWindow={() => void window.noteAPI.openMainWindow()}
             onOpenSync={() => setSyncOpen(true)}
             onDelete={() => void window.noteAPI.deleteNote(note.id)}
