@@ -164,9 +164,13 @@ function registerIpc() {
     }
   });
   ipcMain.handle("window:toggle-collapse", (_event, id) => windows.toggleCollapse(validId(id)));
-  ipcMain.on("window:move", (_event, id, x, y) => {
-    if (Number.isFinite(x) && Number.isFinite(y)) windows.move(validId(id), x, y);
+  ipcMain.on("window:move-start", (event, id) => windows.beginMove(validId(id), event.sender));
+  ipcMain.on("window:move", (event, id, x, y, pointerX, pointerY) => {
+    if ([x, y, pointerX, pointerY].every(Number.isFinite)) {
+      windows.move(validId(id), x, y, pointerX, pointerY, event.sender);
+    }
   });
+  ipcMain.on("window:move-end", (event, id) => windows.endMove(validId(id), event.sender));
   ipcMain.on("window:resize-start", (event, id) => windows.beginResize(validId(id), event.sender));
   ipcMain.on("window:resize", (event, id, edge, size) => {
     const safeSize = validWindowSize(size);
@@ -186,6 +190,17 @@ function registerIpc() {
     if (validWindowDelta(deltaX) && validWindowDelta(deltaY)) windows.moveShelf(deltaX, deltaY, event.sender);
   });
   ipcMain.on("shelf:move-end", (event) => windows.endShelfMove(event.sender));
+  ipcMain.on("shelf:note-drag-start", (event, id, pointerX, pointerY) => {
+    if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
+      windows.beginShelfNoteDrag(validId(id), pointerX, pointerY, event.sender);
+    }
+  });
+  ipcMain.on("shelf:note-drag", (event, id, pointerX, pointerY) => {
+    if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
+      windows.moveShelfNoteDrag(validId(id), pointerX, pointerY, event.sender);
+    }
+  });
+  ipcMain.on("shelf:note-drag-end", (event, id) => windows.endShelfNoteDrag(validId(id), event.sender));
   ipcMain.handle("sync:get-settings", () => sync.getSettings());
   ipcMain.handle("sync:get-status", () => sync.getStatus());
   ipcMain.handle("sync:configure", (_event, settings) => sync.configure(settings));

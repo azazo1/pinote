@@ -84,7 +84,9 @@ export interface NoteAPI {
   openMainWindow: () => Promise<boolean>;
   requestQuit: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;
-  moveWindow: (id: string, x: number, y: number) => void;
+  beginWindowMove: (id: string) => void;
+  moveWindow: (id: string, x: number, y: number, pointerX: number, pointerY: number) => void;
+  endWindowMove: (id: string) => void;
   beginWindowResize: (id: string) => void;
   resizeWindow: (id: string, edge: NoteResizeEdge, size: WindowSize) => void;
   endWindowResize: (id: string) => void;
@@ -99,6 +101,9 @@ export interface NoteAPI {
   beginShelfMove: () => void;
   moveShelf: (deltaX: number, deltaY: number) => void;
   endShelfMove: () => void;
+  beginShelfNoteDrag: (id: string, pointerX: number, pointerY: number) => void;
+  moveShelfNoteDrag: (id: string, pointerX: number, pointerY: number) => void;
+  endShelfNoteDrag: (id: string) => void;
   getSyncSettings: () => Promise<SyncSettings>;
   getSyncStatus: () => Promise<SyncStatus>;
   configureSync: (settings: { url: string; token: string }) => Promise<SyncSettings>;

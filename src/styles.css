@@ -983,6 +983,11 @@ button {
   background: rgb(40 40 36 / 8%);
 }
 
+.note-list-item.is-dragging {
+  background: rgb(40 40 36 / 12%);
+  cursor: grabbing;
+}
+
 .note-list-item > span:last-child {
   min-width: 0;
   overflow: hidden;
@@ -1079,7 +1084,7 @@ button {
   opacity: 0;
   pointer-events: none;
   transform: translateX(18px);
-  transition: opacity 80ms ease, transform 80ms ease;
+  transition: opacity 160ms ease, transform 160ms ease;
 }
 
 .shelf-shell.is-expanded .shelf-handle {
@@ -1163,6 +1168,7 @@ button {
 .shelf-heading strong {
   font-size: 14px;
   letter-spacing: 0;
+  user-select: none;
 }
 
 .shelf-actions {

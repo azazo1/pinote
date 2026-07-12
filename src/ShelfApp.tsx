@@ -1,4 +1,4 @@
-import { GripVertical, NotebookTabs, Plus } from "lucide-react";
+import { AppWindow, GripVertical, NotebookTabs, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { IconButton } from "./components/IconButton";
 import { NoteList } from "./components/NoteList";
@@ -21,12 +21,14 @@ export default function ShelfApp() {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
   const [placement, setPlacement] = useState<ShelfPlacementEdge>(() => {
     const edge = new URLSearchParams(window.location.search).get("edge");
     return edge === "left" || edge === "free" ? edge : "right";
   });
   const hoverTimer = useRef<number | null>(null);
   const drag = useRef<ShelfDrag | null>(null);
+  const noteDragId = useRef<string | null>(null);
   const suppressClick = useRef(false);
   const moveFrame = useRef<number | null>(null);
   const pendingMove = useRef<{ deltaX: number; deltaY: number } | null>(null);
@@ -45,7 +47,7 @@ export default function ShelfApp() {
 
   function scheduleExpand() {
     window.noteAPI.cancelGroupHide();
-    if (drag.current || expanded || hoverTimer.current !== null) return;
+    if (drag.current || noteDragId.current || expanded || hoverTimer.current !== null) return;
     hoverTimer.current = window.setTimeout(() => {
       hoverTimer.current = null;
       if (!drag.current) expandShelf();
@@ -181,13 +183,31 @@ export default function ShelfApp() {
     expandShelf();
   }
 
+  function beginNoteDrag(id: string, screenX: number, screenY: number) {
+    cancelHover();
+    window.noteAPI.cancelGroupHide();
+    noteDragId.current = id;
+    setDraggingNoteId(id);
+    window.noteAPI.beginShelfNoteDrag(id, screenX, screenY);
+  }
+
+  function moveNoteDrag(id: string, screenX: number, screenY: number) {
+    window.noteAPI.moveShelfNoteDrag(id, screenX, screenY);
+  }
+
+  function endNoteDrag(id: string) {
+    noteDragId.current = null;
+    setDraggingNoteId(null);
+    window.noteAPI.endShelfNoteDrag(id);
+  }
+
   return (
     <main
       className={`shelf-shell is-${placement}${expanded ? " is-expanded" : ""}${dragging ? " is-dragging" : ""}`}
       onPointerEnter={scheduleExpand}
       onPointerLeave={() => {
         cancelHover();
-        if (!drag.current) window.noteAPI.hideGroup();
+        if (!drag.current && !noteDragId.current) window.noteAPI.hideGroup();
       }}
     >
       <button
@@ -224,10 +244,18 @@ export default function ShelfApp() {
             <strong>Pinote</strong>
           </div>
           <div className="shelf-actions">
+            <IconButton icon={AppWindow} label="打开主窗口" onClick={() => void window.noteAPI.openMainWindow()} />
             <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createNote()} />
           </div>
         </div>
-        <NoteList notes={dockedNotes} onSelect={(id) => void window.noteAPI.activateDockedNote(id)} />
+        <NoteList
+          notes={dockedNotes}
+          draggingId={draggingNoteId}
+          onSelect={(id) => void window.noteAPI.activateDockedNote(id)}
+          onDragStart={beginNoteDrag}
+          onDragMove={moveNoteDrag}
+          onDragEnd={endNoteDrag}
+        />
       </section>
     </main>
   );

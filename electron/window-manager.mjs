@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
+import { isPointNearBounds } from "./windowing/shelf-proximity.mjs";
 import { snapBounds } from "./windowing/snap-bounds.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -12,8 +13,10 @@ const SHELF_COLLAPSED_SIZE = 36;
 const SHELF_EXPANDED_WIDTH = 200;
 const SHELF_MARGIN = 8;
 const SHELF_EDGE_SNAP_DISTANCE = 20;
+const SHELF_NOTE_TRANSITION_SIZE = 24;
+const SHELF_NOTE_TRANSITION_MS = 180;
 const WINDOW_ANIMATION_MS = 110;
-const SHELF_ANIMATION_MS = 90;
+const SHELF_ANIMATION_MS = SHELF_NOTE_TRANSITION_MS;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 700;
 const WINDOW_STATE_SAVE_DELAY_MS = 120;
@@ -34,6 +37,9 @@ export class WindowManager {
     this.animatingWindows = new Set();
     this.boundsSaveTimers = new Map();
     this.resizeSessions = new Map();
+    this.moveSessions = new Map();
+    this.shelfNoteDragSession = null;
+    this.transitioningNotes = new Set();
     this.rendererFlush = new RendererFlushCoordinator(1_200, (pending) => {
       log.warn("等待便签保存超时", { pending });
     });
@@ -98,6 +104,7 @@ export class WindowManager {
     this.quitting = true;
     this.cancelHideGroup();
     this.finishShelfMove(false);
+    this.finishShelfNoteDrag(false);
     const pendingWindowIds = new Set([...this.boundsSaveTimers.keys(), ...this.resizeSessions.keys()]);
     for (const id of pendingWindowIds) this.flushPendingBounds(id);
     this.resizeSessions.clear();
@@ -207,6 +214,9 @@ export class WindowManager {
       this.cancelAnimation(window);
       this.cancelPendingBounds(note.id);
       this.resizeSessions.delete(note.id);
+      this.moveSessions.delete(note.id);
+      if (this.shelfNoteDragSession?.id === note.id) this.shelfNoteDragSession = null;
+      this.transitioningNotes.delete(note.id);
       if (this.windows.get(note.id) === window) this.windows.delete(note.id);
     });
     window.webContents.on("render-process-gone", (_event, details) => {
@@ -342,10 +352,39 @@ export class WindowManager {
     log.info(collapsed ? "已收起便签" : "已展开便签", { id });
   }
 
-  move(id, x, y) {
+  beginMove(id, sender) {
     const window = this.windows.get(id);
-    if (!window || window.isDestroyed() || this.wayland) return;
-    if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: false });
+    if (
+      this.wayland
+      || !window
+      || window.isDestroyed()
+      || window.webContents !== sender
+    ) return false;
+    this.moveSessions.set(id, {
+      senderId: sender.id,
+      nearShelf: false,
+      previewing: false,
+      returning: false,
+      released: false,
+      fullBounds: window.getBounds(),
+    });
+    this.cancelAnimation(window);
+    this.cancelPendingBounds(id);
+    return true;
+  }
+
+  move(id, x, y, pointerX, pointerY, sender) {
+    const window = this.windows.get(id);
+    const session = this.moveSessions.get(id);
+    if (
+      !window
+      || window.isDestroyed()
+      || this.wayland
+      || window.webContents !== sender
+      || session?.senderId !== sender.id
+    ) return false;
+    const wasDocked = this.store.isDocked(id);
+    if (wasDocked) this.detachDockedNote(id, { restoreBounds: false });
     const current = window.getBounds();
     const proposed = {
       x: Math.round(x),
@@ -364,7 +403,123 @@ export class WindowManager {
       targets.push(bounds);
     }
     const snapped = snapBounds(proposed, targets, display.workArea);
+    session.fullBounds = { ...snapped, width: proposed.width, height: proposed.height };
+    session.nearShelf = !wasDocked && this.shouldDockAtShelf({ x: pointerX, y: pointerY });
+    if (session.nearShelf) {
+      if (!session.previewing) this.beginShelfDockPreview(id, window, session);
+      return true;
+    }
+    if (session.previewing) {
+      this.returnFromShelfDockPreview(id, window, session);
+      return true;
+    }
+    if (session.returning) return true;
     window.setPosition(snapped.x, snapped.y);
+    return true;
+  }
+
+  endMove(id, sender) {
+    const session = this.moveSessions.get(id);
+    if (session?.senderId !== sender.id) return false;
+    this.moveSessions.delete(id);
+    if (session.nearShelf && !this.store.isDocked(id)) {
+      const docked = this.dockNote(id, { animate: true, persist: false });
+      if (docked) log.info("移动便签在侧边球附近松手后已自动收纳", { id });
+      return docked;
+    }
+    if (session.returning) {
+      session.released = true;
+      return true;
+    }
+    this.flushPendingBounds(id);
+    return true;
+  }
+
+  shouldDockAtShelf(point) {
+    if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return false;
+    const shelf = this.shelfWindow;
+    if (!shelf || shelf.isDestroyed()) return false;
+    const display = screen.getDisplayMatching(shelf.getBounds());
+    return isPointNearBounds(point, this.shelfBounds(display, false));
+  }
+
+  shelfNoteTransitionBounds(shelf) {
+    const display = screen.getDisplayMatching(shelf.getBounds());
+    const ball = this.shelfBounds(display, false);
+    return {
+      x: Math.round(ball.x + (ball.width - SHELF_NOTE_TRANSITION_SIZE) / 2),
+      y: Math.round(ball.y + (ball.height - SHELF_NOTE_TRANSITION_SIZE) / 2),
+      width: SHELF_NOTE_TRANSITION_SIZE,
+      height: SHELF_NOTE_TRANSITION_SIZE,
+    };
+  }
+
+  beginNoteTransition(id, window) {
+    this.cancelAnimation(window);
+    this.transitioningNotes.add(id);
+    window.setMinimumSize(1, 1);
+    window.setResizable(false);
+    window.setAlwaysOnTop(true, "pop-up-menu");
+  }
+
+  finishNoteTransition(id, window) {
+    this.cancelAnimation(window);
+    this.transitioningNotes.delete(id);
+    if (!window || window.isDestroyed()) return;
+    const state = this.store.getWindowState(id);
+    window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
+    window.setResizable(this.wayland && !state.collapsed);
+    this.applyPinnedLevel(window, state.pinned);
+  }
+
+  animateNoteIntoShelf(id, window, shelf) {
+    this.beginNoteTransition(id, window);
+    const target = this.shelfNoteTransitionBounds(shelf);
+    this.animateBounds(window, target, SHELF_NOTE_TRANSITION_MS, () => {
+      if (!window.isDestroyed()) window.hide();
+      this.finishNoteTransition(id, window);
+      this.scheduleHideGroup();
+    });
+  }
+
+  beginShelfDockPreview(id, window, session) {
+    session.previewing = true;
+    session.returning = false;
+    this.persistBounds(id);
+    this.beginNoteTransition(id, window);
+    const shelf = this.shelfWindow;
+    if (!shelf || shelf.isDestroyed()) return;
+    this.animateBounds(window, this.shelfNoteTransitionBounds(shelf), SHELF_NOTE_TRANSITION_MS);
+  }
+
+  returnFromShelfDockPreview(id, window, session) {
+    session.previewing = false;
+    session.returning = true;
+    this.cancelAnimation(window);
+    const start = window.getBounds();
+    const animation = { timer: null };
+    const startedAt = performance.now();
+    this.animations.set(window.id, animation);
+    this.animatingWindows.add(window.id);
+
+    const tick = () => {
+      if (window.isDestroyed() || this.animations.get(window.id) !== animation) return;
+      const progress = Math.min(1, (performance.now() - startedAt) / SHELF_NOTE_TRANSITION_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      window.setBounds(interpolateBounds(start, session.fullBounds, eased), false);
+      if (progress < 1) {
+        animation.timer = setTimeout(tick, ANIMATION_FRAME_MS);
+        return;
+      }
+      this.animations.delete(window.id);
+      this.animatingWindows.delete(window.id);
+      session.returning = false;
+      window.setBounds(session.fullBounds, false);
+      this.finishNoteTransition(id, window);
+      if (session.released) this.persistBounds(id);
+    };
+
+    tick();
   }
 
   resize(id, edge, requestedSize, sender) {
@@ -446,6 +601,9 @@ export class WindowManager {
     if (!this.store.deleteNote(id)) return;
     this.cancelPendingBounds(id);
     this.resizeSessions.delete(id);
+    this.moveSessions.delete(id);
+    if (this.shelfNoteDragSession?.id === id) this.shelfNoteDragSession = null;
+    this.transitioningNotes.delete(id);
     window?.destroy();
     this.windows.delete(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
@@ -461,7 +619,7 @@ export class WindowManager {
     return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
   }
 
-  dockNote(id) {
+  dockNote(id, { animate = false, persist = true } = {}) {
     const note = this.store.getNote(id);
     if (!note || this.store.isDocked(id)) return false;
     let window = this.windows.get(id);
@@ -469,13 +627,14 @@ export class WindowManager {
       this.store.updateWindow(id, { open: true });
       window = this.open(note);
     }
-    this.persistBounds(id);
+    if (persist) this.persistBounds(id);
     const mode = this.getDockMode();
     this.store.setDockState(id, mode);
     this.cancelHideGroup();
     if (mode === "shelf") {
-      window.hide();
-      this.ensureShelfWindow();
+      const shelf = this.ensureShelfWindow();
+      if (animate && shelf) this.animateNoteIntoShelf(id, window, shelf);
+      else window.hide();
     } else {
       if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
         this.windows.get(this.activeDockedId)?.hide();
@@ -486,7 +645,7 @@ export class WindowManager {
     }
     this.broadcastNoteList();
     this.sendGroupState();
-    if (mode === "shelf") this.scheduleHideGroup();
+    if (mode === "shelf" && !animate) this.scheduleHideGroup();
     log.info("便签已加入侧边收纳", { id, mode });
     return true;
   }
@@ -495,7 +654,8 @@ export class WindowManager {
     const previousMode = this.store.getDockState(id);
     if (previousMode !== "shelf" && previousMode !== "inline") return false;
     const window = this.windows.get(id);
-    if (window && !window.isDestroyed()) this.cancelAnimation(window);
+    if (window && !window.isDestroyed()) this.finishNoteTransition(id, window);
+    if (this.shelfNoteDragSession?.id === id) this.shelfNoteDragSession = null;
     this.store.setDockState(id, "free");
     if (this.activeDockedId === id) this.activeDockedId = null;
     if (restoreBounds) this.restoreSavedPosition(id, true);
@@ -634,6 +794,132 @@ export class WindowManager {
     return true;
   }
 
+  beginShelfNoteDrag(id, pointerX, pointerY, sender) {
+    const shelf = this.shelfWindow;
+    if (
+      this.getDockMode() !== "shelf"
+      || !shelf
+      || shelf.isDestroyed()
+      || shelf.webContents !== sender
+      || this.store.getDockState(id) !== "shelf"
+      || this.shelfNoteDragSession
+    ) return false;
+
+    const note = this.store.getNote(id);
+    if (!note) return false;
+    let window = this.windows.get(id);
+    if (!window || window.isDestroyed()) {
+      this.store.updateWindow(id, { open: true });
+      window = this.open(note);
+    }
+    this.cancelHideGroup();
+    this.cancelAnimation(window);
+    if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
+      this.windows.get(this.activeDockedId)?.hide();
+    }
+    this.activeDockedId = id;
+    const state = this.store.getWindowState(id);
+    const width = state.collapsed ? COLLAPSED_WIDTH : state.bounds.width;
+    const height = state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height;
+    const offsetX = Math.min(80, Math.round(width / 3));
+    const offsetY = Math.min(11, Math.round(height / 2));
+    this.shelfNoteDragSession = {
+      id,
+      senderId: sender.id,
+      offsetX,
+      offsetY,
+      pointerX,
+      pointerY,
+      revealing: true,
+      releasePending: false,
+    };
+    this.beginNoteTransition(id, window);
+    const start = this.shelfNoteTransitionBounds(shelf);
+    window.setBounds(start, false);
+    window.showInactive();
+    this.animateShelfNoteReveal(window, this.shelfNoteDragSession, start);
+    log.info("已从侧边架开始拖动便签", { id });
+    return true;
+  }
+
+  moveShelfNoteDrag(id, pointerX, pointerY, sender) {
+    const session = this.shelfNoteDragSession;
+    const window = this.windows.get(id);
+    if (
+      session?.id !== id
+      || session.senderId !== sender.id
+      || !window
+      || window.isDestroyed()
+      || this.store.getDockState(id) !== "shelf"
+    ) return false;
+    session.pointerX = pointerX;
+    session.pointerY = pointerY;
+    if (!session.revealing) window.setBounds(this.shelfNoteDragBounds(session), false);
+    return true;
+  }
+
+  shelfNoteDragBounds(session) {
+    const display = screen.getDisplayNearestPoint({ x: session.pointerX, y: session.pointerY });
+    const state = this.store.getWindowState(session.id);
+    return this.clampBounds({
+      x: Math.round(session.pointerX - session.offsetX),
+      y: Math.round(session.pointerY - session.offsetY),
+      width: state.collapsed ? COLLAPSED_WIDTH : state.bounds.width,
+      height: state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height,
+    }, display.workArea);
+  }
+
+  animateShelfNoteReveal(window, session, start) {
+    const animation = { timer: null };
+    const startedAt = performance.now();
+    this.animations.set(window.id, animation);
+    this.animatingWindows.add(window.id);
+
+    const tick = () => {
+      if (window.isDestroyed() || this.animations.get(window.id) !== animation) return;
+      const progress = Math.min(1, (performance.now() - startedAt) / SHELF_NOTE_TRANSITION_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      window.setBounds(interpolateBounds(start, this.shelfNoteDragBounds(session), eased), false);
+      if (progress < 1) {
+        animation.timer = setTimeout(tick, ANIMATION_FRAME_MS);
+        return;
+      }
+      this.animations.delete(window.id);
+      this.animatingWindows.delete(window.id);
+      session.revealing = false;
+      window.setBounds(this.shelfNoteDragBounds(session), false);
+      if (session.releasePending) this.finishShelfNoteDrag(true);
+    };
+
+    tick();
+  }
+
+  endShelfNoteDrag(id, sender) {
+    const session = this.shelfNoteDragSession;
+    if (session?.id !== id || session.senderId !== sender.id) return false;
+    return this.finishShelfNoteDrag(true);
+  }
+
+  finishShelfNoteDrag(detach) {
+    const session = this.shelfNoteDragSession;
+    if (!session) return false;
+    if (detach && session.revealing) {
+      session.releasePending = true;
+      return true;
+    }
+    this.shelfNoteDragSession = null;
+    const window = this.windows.get(session.id);
+    if (window && !window.isDestroyed()) this.finishNoteTransition(session.id, window);
+    if (!detach) {
+      window?.hide();
+      return true;
+    }
+    const detached = this.detachDockedNote(session.id, { restoreBounds: false });
+    if (detached) this.persistBounds(session.id);
+    log.info("侧边架便签已通过拖动移出", { id: session.id });
+    return detached;
+  }
+
   moveShelf(deltaX, deltaY, sender) {
     const shelf = this.shelfWindow;
     const session = this.shelfMoveSession;
@@ -767,6 +1053,7 @@ export class WindowManager {
       this.broadcastNoteList();
       return this.store.getRenderableNote(id);
     }
+    if (this.transitioningNotes.has(id)) this.finishNoteTransition(id, window);
     if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
       this.windows.get(this.activeDockedId)?.hide();
     }
@@ -889,7 +1176,7 @@ export class WindowManager {
   }
 
   schedulePersistBounds(id) {
-    if (this.store.isDocked(id) || this.resizeSessions.has(id)) return;
+    if (this.store.isDocked(id) || this.resizeSessions.has(id) || this.transitioningNotes.has(id)) return;
     clearTimeout(this.boundsSaveTimers.get(id));
     this.boundsSaveTimers.set(id, setTimeout(() => {
       this.boundsSaveTimers.delete(id);

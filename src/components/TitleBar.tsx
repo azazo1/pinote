@@ -27,6 +27,7 @@ export function TitleBar(props: TitleBarProps) {
       windowY: window.screenY,
       moved: false,
     };
+    window.noteAPI.beginWindowMove(props.noteId);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -37,7 +38,13 @@ export function TitleBar(props: TitleBarProps) {
     const dy = event.screenY - drag.current.pointerY;
     if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
     if (drag.current.moved) {
-      window.noteAPI.moveWindow(props.noteId, drag.current.windowX + dx, drag.current.windowY + dy);
+      window.noteAPI.moveWindow(
+        props.noteId,
+        drag.current.windowX + dx,
+        drag.current.windowY + dy,
+        event.screenX,
+        event.screenY,
+      );
     }
   }
 
@@ -45,6 +52,7 @@ export function TitleBar(props: TitleBarProps) {
     if (props.nativeDrag) return;
     if (!drag.current) return;
     drag.current = null;
+    window.noteAPI.endWindowMove(props.noteId);
   }
 
   return (
@@ -53,6 +61,8 @@ export function TitleBar(props: TitleBarProps) {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
       onDoubleClick={props.onCollapse}
     >
       <span className="collapsed-title">{props.title || "无标题"}</span>
