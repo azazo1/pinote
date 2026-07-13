@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test, type Page } from "playwright/test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -23,6 +24,52 @@ test("新建便签聚焦标题并用回车进入内容", async () => {
     await expect(titleInput).toBeFocused();
     await titleInput.press("Enter");
     await expect(editorContent).toBeFocused();
+  } finally {
+    await app.close();
+  }
+});
+
+test("编辑侧边便签后切换应用会自动收回", async () => {
+  test.skip(process.platform !== "darwin", "仅在 macOS 验证跨应用焦点切换");
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-deactivate-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+
+    const noteWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const noteWindow = await noteWindowCreated;
+    await expect(noteWindow.locator(".title-input")).toBeFocused();
+    const noteId = new URL(noteWindow.url()).searchParams.get("noteId");
+    if (!noteId) throw new Error("便签 id 不存在");
+
+    await noteWindow.evaluate((id) => window.noteAPI.toggleNoteDock(id), noteId);
+    await expect.poll(() => app.windows().find((page) => page.url().includes("view=shelf"))).toBeTruthy();
+    const shelfWindow = app.windows().find((page) => page.url().includes("view=shelf"));
+    if (!shelfWindow) throw new Error("侧边架窗口未创建");
+    await shelfWindow.evaluate(() => window.noteAPI.setShelfExpanded(true));
+    await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(200);
+    await shelfWindow.locator(".note-list-item").click();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => (
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
+    ), noteWindow.url())).toBe(true);
+
+    const changedMarkdown = "应用失活前修改的内容";
+    await noteWindow.locator(".note-editor .cm-content").fill(changedMarkdown);
+    await expect.poll(() => noteWindow.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note?.markdown, noteId)).toBe(changedMarkdown);
+    execFileSync("osascript", ["-e", "tell application \"Finder\" to activate"]);
+
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => (
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
+    ), noteWindow.url())).toBe(false);
+    await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(36);
   } finally {
     await app.close();
   }
@@ -1112,6 +1159,7 @@ test("归档便签显示 checkbox 并可恢复", async () => {
     if (!noteId) throw new Error("便签 id 不存在");
 
     await noteWindow.bringToFront();
+    await expect(noteWindow.locator(".title-input")).toBeFocused();
     await app.evaluate(({ BrowserWindow, Menu }, url) => {
       const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
       const item = Menu.getApplicationMenu()?.getMenuItemById("toggle-archive");

@@ -21,6 +21,7 @@ const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = SHELF_NOTE_TRANSITION_MS;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 700;
+const APP_BLUR_HIDE_DELAY_MS = 80;
 const WINDOW_STATE_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
@@ -37,6 +38,7 @@ export class WindowManager {
     this.shelfExpanded = false;
     this.activeDockedId = null;
     this.hideTimer = null;
+    this.appBlurTimer = null;
     this.shelfMoveSession = null;
     this.animations = new Map();
     this.animatingWindows = new Set();
@@ -111,6 +113,7 @@ export class WindowManager {
   prepareToQuit() {
     this.quitting = true;
     this.cancelHideGroup();
+    this.cancelAppBlurHide();
     this.finishShelfMove(false);
     this.finishShelfNoteDrag(false);
     this.cancelShelfHoverExpansion();
@@ -1177,6 +1180,29 @@ export class WindowManager {
     this.hideTimer = null;
   }
 
+  handleBrowserWindowBlur(blurredWindow) {
+    if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
+    const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
+      ? this.windows.get(this.activeDockedId)
+      : null;
+    if (blurredWindow !== activeWindow && blurredWindow !== this.shelfWindow) return;
+    this.cancelAppBlurHide();
+    this.appBlurTimer = setTimeout(() => {
+      this.appBlurTimer = null;
+      if (this.shelfNoteDragSession || this.moveSessions.size > 0) return;
+      const activeWindowVisible = activeWindow && !activeWindow.isDestroyed() && activeWindow.isVisible();
+      if (!this.shelfExpanded && !activeWindowVisible) return;
+      this.cancelHideGroup();
+      this.hideGroupNow(activeWindow);
+      log.info("切换到其他应用后已收回侧边栏");
+    }, APP_BLUR_HIDE_DELAY_MS);
+  }
+
+  cancelAppBlurHide() {
+    clearTimeout(this.appBlurTimer);
+    this.appBlurTimer = null;
+  }
+
   scheduleHideGroup() {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
     this.cancelHideGroup();
@@ -1197,10 +1223,19 @@ export class WindowManager {
         this.scheduleHideGroup();
         return;
       }
-      activeWindow?.hide();
-      this.activeDockedId = null;
-      this.setShelfExpanded(false);
+      this.hideGroupNow(activeWindow);
     }, SHELF_HIDE_DELAY_MS);
+  }
+
+  hideGroupNow(activeWindow = null) {
+    const window = activeWindow ?? (
+      this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
+        ? this.windows.get(this.activeDockedId)
+        : null
+    );
+    if (window && !window.isDestroyed()) window.hide();
+    this.activeDockedId = null;
+    this.setShelfExpanded(false);
   }
 
   activateDockedNote(id) {

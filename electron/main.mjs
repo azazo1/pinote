@@ -76,6 +76,11 @@ app.whenReady().then(async () => {
     if (quitStarted || !windows.shouldOpenMainWindowOnActivate()) return;
     windows.openMainWindow();
   });
+  app.on("browser-window-blur", (_event, window) => {
+    if (quitStarted) return;
+    windows.handleBrowserWindowBlur(window);
+  });
+  app.on("browser-window-focus", () => windows.cancelAppBlurHide());
 }).catch((error) => {
   log.error("Pinote 启动失败", error);
   app.quit();
