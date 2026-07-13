@@ -1,7 +1,7 @@
-use std::{io, net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
-use pinote_sync_server::{Store, build_router};
+use pinote_sync_server::{Store, build_router, prepare_server_files};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -15,7 +15,7 @@ struct Cli {
     #[arg(long, env = "PINOTE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
     #[arg(long, env = "PINOTE_TOKEN_FILE")]
-    token_file: PathBuf,
+    token_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -23,25 +23,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     init_tracing();
 
-    let token = tokio::fs::read_to_string(&cli.token_file)
-        .await
-        .map_err(|cause| {
-            io::Error::new(
-                cause.kind(),
-                format!(
-                    "无法读取令牌文件 {}: {cause}",
-                    cli.token_file.display()
-                ),
-            )
-        })?;
-    let token = token.trim();
-    if token.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "令牌文件不能为空").into());
+    let files = prepare_server_files(&cli.data_dir, cli.token_file.as_deref()).await?;
+    if files.token_created {
+        info!(token_file = %files.token_file.display(), "已生成新的访问令牌文件");
     }
 
     let database_path = cli.data_dir.join("pinote.db");
     let store = Store::open(&database_path).await?;
-    let app = build_router(store, token);
+    let app = build_router(store, &files.token);
     let address = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, data_dir = %cli.data_dir.display(), "Pinote 同步服务已启动");

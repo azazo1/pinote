@@ -11,10 +11,10 @@ services:
       PINOTE_HOST: 0.0.0.0
       PINOTE_PORT: 8787
       PINOTE_DATA_DIR: /data
+      PINOTE_TOKEN_FILE: /secrets/pinote-token
     volumes:
       - "${PINOTE_DATA_PATH:-./data}:/data"
-    secrets:
-      - pinote_token
+      - "${PINOTE_SECRETS_PATH:-./secrets}:/secrets"
     read_only: true
     tmpfs:
       - /tmp
@@ -27,7 +27,3 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-
-secrets:
-  pinote_token:
-    file: ${PINOTE_TOKEN_FILE:-./secrets/pinote-token}

@@ -29,7 +29,6 @@ dist-linux:
 test:
     bun run test
 
-# just sync-server ./secrets/pinote-token
 # 启动自托管同步服务.
-sync-server token_file *args:
-    cargo run --manifest-path server/Cargo.toml -- --token-file {{token_file}} {{args}}
+sync-server *args:
+    cargo run --manifest-path server/Cargo.toml -- {{args}}
