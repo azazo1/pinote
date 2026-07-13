@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use axum::{
     Router,
@@ -77,6 +77,53 @@ async fn health_and_readiness_are_public_but_sync_requires_authentication() {
 
     let (status, _) = send_sync(app, "wrong-token", request(Vec::new(), Vec::new())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn server_sent_events_require_authentication_and_report_committed_revisions() {
+    let directory = TempDir::new().expect("临时目录应创建成功");
+    let app = test_app(&directory.path().join("pinote.db")).await;
+
+    let unauthorized = app
+        .clone()
+        .oneshot(Request::builder().uri("/v1/events").body(Body::empty()).unwrap())
+        .await
+        .expect("事件流鉴权请求应成功");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("事件流请求应成功");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let mut body = response.into_body();
+    let ready = tokio::time::timeout(Duration::from_secs(1), body.frame())
+        .await
+        .expect("事件流应及时建立")
+        .expect("事件流应包含就绪事件")
+        .expect("就绪事件应可读取");
+    assert_eq!(ready.data_ref().unwrap(), "event: ready\n\n");
+
+    send_sync(
+        app,
+        TOKEN,
+        request(vec![change("note-1", "标题", "内容", 0, 1_000)], Vec::new()),
+    )
+    .await;
+    let changed = tokio::time::timeout(Duration::from_secs(1), body.frame())
+        .await
+        .expect("提交后应及时发送事件")
+        .expect("事件流应包含变更事件")
+        .expect("变更事件应可读取");
+    assert_eq!(changed.data_ref().unwrap(), "event: changed\ndata: 1\n\n");
 }
 
 #[tokio::test]

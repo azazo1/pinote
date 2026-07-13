@@ -10,7 +10,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -73,6 +77,8 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Check out repository and tags
         uses: actions/checkout@v4
@@ -87,15 +93,56 @@ jobs:
           merge-multiple: true
 
       - name: Read tag notes
-        run: git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/release-notes.md"
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          tag_notes="${RUNNER_TEMP}/tag-notes.md"
+
+          git fetch --force origin "${tag_ref}:${tag_ref}"
+          if [[ "$(git cat-file -t "${tag_ref}")" == "tag" ]]; then
+            git for-each-ref \
+              --format='%(contents:subject)%0a%0a%(contents:body)' \
+              "${tag_ref}" > "${tag_notes}"
+            test -s "${tag_notes}"
+          else
+            : > "${tag_notes}"
+          fi
+
+      - name: Generate release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag_notes="${RUNNER_TEMP}/tag-notes.md"
+          release_notes="${RUNNER_TEMP}/release-notes.md"
+          generated_notes="$(gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${GITHUB_REF_NAME}" \
+            -f target_commitish="${GITHUB_SHA}" \
+            --jq '.body')"
+
+          cat "${tag_notes}" > "${release_notes}"
+          if [[ -s "${tag_notes}" && -n "${generated_notes}" ]]; then
+            printf '\n' >> "${release_notes}"
+          fi
+          printf '%s\n' "${generated_notes}" >> "${release_notes}"
+          test -s "${release_notes}"
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-notes.md"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "Pinote ${GITHUB_REF_NAME}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
             gh release upload "${GITHUB_REF_NAME}" release/* --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" release/* --verify-tag --notes-file "${RUNNER_TEMP}/release-notes.md"
+            gh release create "${GITHUB_REF_NAME}" release/* \
+              --verify-tag \
+              --title "Pinote ${GITHUB_REF_NAME}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
           fi

@@ -20,6 +20,13 @@ pub struct Store {
     writer: Arc<Mutex<()>>,
 }
 
+#[derive(Debug)]
+pub struct SyncOutcome {
+    pub response: SyncResponse,
+    pub revision: i64,
+    pub changed: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("无法创建数据目录: {0}")]
@@ -87,9 +94,10 @@ impl Store {
         Ok(())
     }
 
-    pub async fn sync(&self, request: SyncRequest) -> Result<SyncResponse, StoreError> {
+    pub async fn sync(&self, request: SyncRequest) -> Result<SyncOutcome, StoreError> {
         let _writer = self.writer.lock().await;
         let mut transaction = self.pool.begin().await?;
+        let previous_revision = current_revision(&mut transaction).await?;
         let seen_at = unix_timestamp_millis();
         sqlx::query(
             "INSERT INTO devices (id, last_seen_at) VALUES (?, ?) \
@@ -126,11 +134,16 @@ impl Store {
         .map(Tombstone::from)
         .collect();
 
+        let revision = current_revision(&mut transaction).await?;
         transaction.commit().await?;
-        Ok(SyncResponse {
-            notes,
-            deleted,
-            conflicts,
+        Ok(SyncOutcome {
+            response: SyncResponse {
+                notes,
+                deleted,
+                conflicts,
+            },
+            revision,
+            changed: revision != previous_revision,
         })
     }
 }
@@ -314,6 +327,12 @@ async fn next_revision(transaction: &mut Transaction<'_, Sqlite>) -> Result<i64,
     )
     .fetch_one(&mut **transaction)
     .await
+}
+
+async fn current_revision(transaction: &mut Transaction<'_, Sqlite>) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT revision FROM sync_state WHERE id = 1")
+        .fetch_one(&mut **transaction)
+        .await
 }
 
 fn conflict_title(title: &str) -> String {

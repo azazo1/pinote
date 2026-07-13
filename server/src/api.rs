@@ -1,14 +1,16 @@
-use std::time::{Duration, Instant};
+use std::{convert::Infallible, time::{Duration, Instant}};
 
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State, rejection::JsonRejection},
-    http::StatusCode,
+    http::{HeaderName, StatusCode, header},
     middleware,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{get, post},
 };
 use serde_json::json;
+use tokio::sync::broadcast;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -23,11 +25,14 @@ const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(8);
 #[derive(Clone)]
 struct AppState {
     store: Store,
+    changes: broadcast::Sender<i64>,
 }
 
 pub fn build_router(store: Store, token: &str) -> Router {
+    let (changes, _) = broadcast::channel(64);
     let protected = Router::new()
         .route("/v1/sync", post(sync))
+        .route("/v1/events", get(events))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .route_layer(middleware::from_fn_with_state(
             AuthToken::new(token),
@@ -39,7 +44,7 @@ pub fn build_router(store: Store, token: &str) -> Router {
         .route("/readyz", get(ready))
         .merge(protected)
         .fallback(not_found)
-        .with_state(AppState { store })
+        .with_state(AppState { store, changes })
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -74,17 +79,21 @@ async fn sync(
     let result = tokio::time::timeout(TRANSACTION_TIMEOUT, state.store.sync(request)).await;
     match result {
         Ok(Ok(response)) => {
+            if response.changed {
+                let _ = state.changes.send(response.revision);
+            }
             info!(
                 device_id,
                 change_count,
                 deletion_count,
-                note_count = response.notes.len(),
-                deleted_count = response.deleted.len(),
-                conflict_count = response.conflicts.len(),
+                note_count = response.response.notes.len(),
+                deleted_count = response.response.deleted.len(),
+                conflict_count = response.response.conflicts.len(),
+                revision = response.revision,
                 duration_ms = started_at.elapsed().as_millis(),
                 "同步请求完成"
             );
-            Ok(Json(response))
+            Ok(Json(response.response))
         }
         Ok(Err(cause)) => {
             error!(
@@ -108,6 +117,27 @@ async fn sync(
             Err(ApiError::timeout())
         }
     }
+}
+
+async fn events(State(state): State<AppState>) -> impl IntoResponse {
+    let ready = tokio_stream::once(Ok::<_, Infallible>(Event::default().event("ready")));
+    let changes = BroadcastStream::new(state.changes.subscribe()).filter_map(|revision| {
+        revision.ok().map(|revision| {
+            Ok::<_, Infallible>(Event::default().event("changed").data(revision.to_string()))
+        })
+    });
+    let stream = ready.chain(changes);
+    (
+        [
+            (header::CACHE_CONTROL, "no-cache"),
+            (HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        Sse::new(stream).keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(5))
+                .text("keepalive"),
+        ),
+    )
 }
 
 async fn not_found() -> ApiError {
@@ -157,4 +187,3 @@ impl IntoResponse for ApiError {
         (self.status, Json(json!({ "error": self.message }))).into_response()
     }
 }
-

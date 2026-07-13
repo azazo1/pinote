@@ -29,7 +29,7 @@ just dist-linux
 
 macOS 产物为 arm64 和 x64 DMG, Windows 产物为 x64 NSIS 安装器, Linux 产物为 x64 AppImage 和 deb. 文件统一写入 `release/`. 这些首版产物没有 Apple 公证或 Windows 代码签名, 安装时可能触发系统安全提示.
 
-日常开发可以运行 `just dist` 只构建当前平台的默认目标. GitHub Actions 会在 macOS, Windows 和 Ubuntu runner 上分别执行测试与原生打包, 不使用交叉编译. 推送 `v*` tag 后会自动创建或更新 GitHub Release, 使用 tag 内容作为 Release notes, 并附加三个平台的安装包.
+日常开发可以运行 `just dist` 只构建当前平台的默认目标. GitHub Actions 会在 macOS, Windows 和 Ubuntu runner 上分别执行测试与原生打包, 不使用交叉编译. 推送 `v*` tag 后会自动创建或更新 GitHub Release, 将 annotated tag 描述置于自动生成的变更列表之前, 并附加三个平台的安装包.
 
 ## 自托管同步
 

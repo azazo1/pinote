@@ -1,9 +1,10 @@
 import { safeStorage } from "electron";
 import log from "electron-log/main.js";
+import { SseChangeStream } from "./sync/sse-change-stream.mjs";
 
-const NORMAL_INTERVAL_MS = 15_000;
+const NORMAL_INTERVAL_MS = 5_000;
 const CHANGE_DELAY_MS = 750;
-const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 60_000, 300_000];
+const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
 export class SyncService {
   constructor(store, windows) {
@@ -17,6 +18,7 @@ export class SyncService {
     this.stopped = false;
     this.retryIndex = 0;
     this.status = { state: "idle", message: "同步未启用" };
+    this.events = new SseChangeStream(() => void this.syncNow().catch(() => {}));
   }
 
   initialize() {
@@ -29,8 +31,12 @@ export class SyncService {
         log.error("读取同步令牌失败", error);
       }
     }
-    if (this.isConfigured()) void this.syncNow().catch(() => {});
-    else this.scheduleNext(NORMAL_INTERVAL_MS);
+    if (this.isConfigured()) {
+      this.events.start(this.store.state.sync.url, this.token);
+      void this.syncNow().catch(() => {});
+    } else {
+      this.scheduleNext(NORMAL_INTERVAL_MS);
+    }
   }
 
   async stop() {
@@ -41,9 +47,12 @@ export class SyncService {
     this.stopped = true;
     this.clearScheduled();
     this.controller?.abort();
-    await this.running?.catch((error) => {
-      log.warn("等待同步停止时发生错误", { message: error instanceof Error ? error.message : "未知错误" });
-    });
+    await Promise.all([
+      this.events.stop(),
+      this.running?.catch((error) => {
+        log.warn("等待同步停止时发生错误", { message: error instanceof Error ? error.message : "未知错误" });
+      }),
+    ]);
   }
 
   clearScheduled() {
@@ -85,9 +94,11 @@ export class SyncService {
     if (!url) {
       this.clearScheduled();
       this.controller?.abort();
+      await this.events.stop();
       this.broadcast({ state: "idle", message: "同步未启用" });
       return this.getSettings();
     }
+    this.events.start(url, this.token);
     await this.syncNow();
     return this.getSettings();
   }
