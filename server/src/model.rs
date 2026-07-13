@@ -31,6 +31,7 @@ pub struct NoteChange {
     pub color: String,
     pub group_name: String,
     pub tags: Vec<String>,
+    pub archived_at: Option<i64>,
     pub base_revision: i64,
     pub modified_at: i64,
     pub modified_by: String,
@@ -53,6 +54,7 @@ pub struct SyncNote {
     pub color: String,
     pub group_name: String,
     pub tags: Vec<String>,
+    pub archived_at: Option<i64>,
     pub revision: i64,
     pub modified_at: i64,
     pub modified_by: String,
@@ -100,6 +102,9 @@ impl SyncRequest {
                 return Err(format!("便签 {} 的分组名称无效", change.id));
             }
             validate_tags(&change.id, &change.tags)?;
+            if change.archived_at.is_some_and(|archived_at| archived_at <= 0) {
+                return Err(format!("便签 {} 的归档时间无效", change.id));
+            }
             if change.color.is_empty() || change.color.len() > MAX_COLOR_BYTES {
                 return Err(format!("便签 {} 的颜色值无效", change.id));
             }

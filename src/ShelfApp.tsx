@@ -59,7 +59,7 @@ export default function ShelfApp() {
   }
 
   const dockedNotes = notes
-    .filter((note) => note.dockState === "shelf")
+    .filter((note) => note.archivedAt === null && note.dockState === "shelf")
     .sort((left, right) => {
       const leftIndex = shelfOrder.indexOf(left.id);
       const rightIndex = shelfOrder.indexOf(right.id);
@@ -111,7 +111,9 @@ export default function ShelfApp() {
     function updateNotes(nextNotes: NoteSummary[]) {
       setNotes(nextNotes);
       setShelfOrder((current) => {
-        const dockedIds = nextNotes.filter((note) => note.dockState === "shelf").map((note) => note.id);
+        const dockedIds = nextNotes
+          .filter((note) => note.archivedAt === null && note.dockState === "shelf")
+          .map((note) => note.id);
         const retained = current.filter((id) => dockedIds.includes(id));
         return [...retained, ...dockedIds.filter((id) => !retained.includes(id))];
       });

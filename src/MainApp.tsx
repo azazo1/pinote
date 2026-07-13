@@ -11,12 +11,14 @@ export default function MainApp() {
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [tagFilters, setTagFilters] = useState<string[]>([]);
+  const [noteView, setNoteView] = useState<"active" | "archived">("active");
   const [activeView, setActiveView] = useState<"notes" | "settings">("notes");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
   const [creating, setCreating] = useState(false);
   const [quitting, setQuitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,20 +46,25 @@ export default function MainApp() {
     }
   }), []);
 
+  const scopedNotes = useMemo(
+    () => notes.filter((note) => noteView === "active" ? note.archivedAt === null : note.archivedAt !== null),
+    [noteView, notes],
+  );
+
   const groupOptions = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const note of notes) {
+    for (const note of scopedNotes) {
       const name = note.groupName.trim();
       if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
     }
     return [...counts.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
-  }, [notes]);
+  }, [scopedNotes]);
 
   const tagOptions = useMemo(() => {
     const labels = new Map<string, { label: string; count: number }>();
-    for (const note of notes) {
+    for (const note of scopedNotes) {
       const noteTags = new Map<string, string>();
       for (const rawTag of note.tags) {
         const label = rawTag.trim();
@@ -71,7 +78,7 @@ export default function MainApp() {
     return [...labels.entries()]
       .map(([key, value]) => ({ key, ...value }))
       .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
-  }, [notes]);
+  }, [scopedNotes]);
 
   useEffect(() => {
     if (groupFilter !== null && groupFilter !== "" && !groupOptions.some((group) => group.name === groupFilter)) {
@@ -89,7 +96,7 @@ export default function MainApp() {
 
   const visibleNotes = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return notes
+    return scopedNotes
       .filter((note) => {
         const groupName = note.groupName.trim();
         if (groupFilter !== null && groupName !== groupFilter) return false;
@@ -109,7 +116,7 @@ export default function MainApp() {
       })
       .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
         || right.modifiedAt - left.modifiedAt);
-  }, [groupFilter, notes, query, tagFilters]);
+  }, [groupFilter, query, scopedNotes, tagFilters]);
 
   async function createNote() {
     if (creating) return;
@@ -147,6 +154,19 @@ export default function MainApp() {
     }
   }
 
+  async function setArchived(id: string, archived: boolean) {
+    if (updatingId) return;
+    setUpdatingId(id);
+    setActionError("");
+    try {
+      await noteAPI.setNoteArchived(id, archived);
+    } catch {
+      setActionError(archived ? "无法归档便签, 请稍后重试" : "无法恢复便签, 请稍后重试");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
   async function requestQuit() {
     if (quitting) return;
     setQuitting(true);
@@ -160,9 +180,11 @@ export default function MainApp() {
     }
   }
 
-  const ungroupedCount = notes.filter((note) => !note.groupName.trim()).length;
+  const activeCount = notes.filter((note) => note.archivedAt === null).length;
+  const archivedCount = notes.length - activeCount;
+  const ungroupedCount = scopedNotes.filter((note) => !note.groupName.trim()).length;
   const hasActiveFilters = Boolean(query.trim()) || groupFilter !== null || tagFilters.length > 0;
-  const noMatches = notes.length > 0 && visibleNotes.length === 0;
+  const noMatches = scopedNotes.length > 0 && visibleNotes.length === 0;
 
   function toggleTag(tag: string) {
     setTagFilters((current) => current.includes(tag)
@@ -250,8 +272,25 @@ export default function MainApp() {
             )}
           </label>
           <span className="main-result-count" aria-live="polite">
-            {hasActiveFilters ? `${visibleNotes.length} 个结果` : `${notes.length} 张便签`}
+            {hasActiveFilters ? `${visibleNotes.length} 个结果` : `${scopedNotes.length} 张便签`}
           </span>
+        </div>
+
+        <div className="main-note-view" role="group" aria-label="便签状态">
+          <button
+            type="button"
+            aria-pressed={noteView === "active"}
+            onClick={() => setNoteView("active")}
+          >
+            活跃 <span>{activeCount}</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={noteView === "archived"}
+            onClick={() => setNoteView("archived")}
+          >
+            已归档 <span>{archivedCount}</span>
+          </button>
         </div>
 
         <div className="main-filter-row" aria-label="按分组筛选">
@@ -263,7 +302,7 @@ export default function MainApp() {
               aria-pressed={groupFilter === null}
               onClick={() => setGroupFilter(null)}
             >
-              全部 <span>{notes.length}</span>
+              全部 <span>{scopedNotes.length}</span>
             </button>
             <button
               className="main-group-filter"
@@ -312,23 +351,25 @@ export default function MainApp() {
 
       {actionError && <div className="main-action-error" role="alert">{actionError}</div>}
 
-      <section className="main-content" aria-label="全部便签">
+      <section className="main-content" aria-label={noteView === "active" ? "活跃便签" : "已归档便签"}>
         {visibleNotes.length > 0 ? (
           <MainNoteList
             notes={visibleNotes}
             deletingId={deletingId}
+            updatingId={updatingId}
             onOpen={(id) => void openNote(id)}
+            onSetArchived={(id, archived) => void setArchived(id, archived)}
             onDelete={(id) => void deleteNote(id)}
           />
         ) : (
           <div className="main-empty">
             <StickyNote size={28} strokeWidth={1.5} aria-hidden="true" />
-            <strong>{noMatches ? "没有匹配的便签" : "还没有便签"}</strong>
+            <strong>{noMatches ? "没有匹配的便签" : noteView === "active" ? "还没有便签" : "还没有已归档便签"}</strong>
             {noMatches ? (
               <button type="button" className="main-empty-command" onClick={clearFilters}>清除筛选</button>
-            ) : (
+            ) : noteView === "active" ? (
               <button type="button" className="main-empty-command" onClick={() => void createNote()}>新建便签</button>
-            )}
+            ) : null}
           </div>
         )}
       </section>

@@ -78,6 +78,7 @@ test("主窗口和便签窗口关键流程", async () => {
         "toggle-dock",
         "toggle-color-picker",
         "toggle-metadata",
+        "toggle-archive",
         "focus-search",
         "open-settings",
         "sync-now",
@@ -95,6 +96,7 @@ test("主窗口和便签窗口关键流程", async () => {
       "toggle-dock": "CommandOrControl+Shift+D",
       "toggle-color-picker": "CommandOrControl+Shift+C",
       "toggle-metadata": "CommandOrControl+Shift+T",
+      "toggle-archive": "CommandOrControl+Shift+M",
       "focus-search": process.platform === "darwin" ? "Command+F" : "Control+Shift+F",
       "open-settings": "CommandOrControl+,",
       "sync-now": null,
@@ -388,7 +390,8 @@ test("主窗口和便签窗口关键流程", async () => {
     await window.getByLabel("便签操作").click();
     const menu = window.getByRole("menu", { name: "便签操作" });
     await expect(menu).toBeVisible();
-    await expect(menu.getByRole("menuitem")).toHaveCount(5);
+    await expect(menu.getByRole("menuitem")).toHaveCount(6);
+    await expect(menu.getByRole("menuitem", { name: "标记完成" })).toBeVisible();
     await expect(menu.getByText("开始专注")).toHaveCount(0);
     await window.screenshot({ path: "/private/tmp/pinote-note-menu.png" });
     await menu.getByRole("menuitem", { name: "便签颜色" }).click();
@@ -410,7 +413,6 @@ test("主窗口和便签窗口关键流程", async () => {
     if (!secondWindow) throw new Error("第二张便签窗口未创建");
     const secondNoteId = new URL(secondWindow.url()).searchParams.get("noteId");
     if (!secondNoteId) throw new Error("第二张便签 id 不存在");
-    const secondNoteUrl = secondWindow.url();
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
     }, secondWindow.url())).toBe(true);
@@ -1024,10 +1026,11 @@ test("主窗口和便签窗口关键流程", async () => {
     await secondWindow.getByLabel("关闭便签").click();
     await dockedSecondClosed;
     await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
+    const reopenedSecondWindow = app.waitForEvent("window");
     await shelf!.locator(".note-list-item").click();
-    await expect.poll(() => app.windows().some((page) => page.url() === secondNoteUrl)).toBe(true);
-    secondWindow = app.windows().find((page) => page.url() === secondNoteUrl);
-    if (!secondWindow) throw new Error("侧边便签未重新打开");
+    secondWindow = await reopenedSecondWindow;
+    await secondWindow.waitForLoadState("domcontentloaded");
+    expect(new URL(secondWindow.url()).searchParams.get("noteId")).toBe(secondNoteId);
     await secondWindow.getByLabel("移出侧边").click();
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
     await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
@@ -1049,11 +1052,12 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect(closedRow).toHaveCount(1);
     await expect(closedRow.locator(".main-note-open-state")).toHaveCount(0);
 
+    const reopenedFirstWindow = app.waitForEvent("window");
     await closedRow.locator(".main-note-open").click();
-    await expect.poll(() => app.windows().some((page) => page.url() === firstNoteUrl)).toBe(true);
-    const reopenedWindow = app.windows().find((page) => page.url() === firstNoteUrl);
-    expect(reopenedWindow).toBeTruthy();
-    await expect(reopenedWindow!.locator(".title-input")).toHaveValue("QA 便签");
+    const reopenedWindow = await reopenedFirstWindow;
+    await reopenedWindow.waitForLoadState("domcontentloaded");
+    expect(new URL(reopenedWindow.url()).searchParams.get("noteId")).toBe(firstNoteId);
+    await expect(reopenedWindow.locator(".title-input")).toHaveValue("QA 便签");
 
     await app.evaluate(({ dialog }) => {
       Object.defineProperty(dialog, "showMessageBox", {
@@ -1080,11 +1084,57 @@ test("主窗口和便签窗口关键流程", async () => {
       await expect.poll(() => app.evaluate(({ app }) => app.dock.isVisible())).toBe(false);
     }
 
-    await triggerShortcut(reopenedWindow!, "open-main-window");
+    await triggerShortcut(reopenedWindow, "open-main-window");
     await expect.poll(readMainState).toMatchObject({ visible: true, minimized: false, destroyed: false });
     if (process.platform === "darwin") {
       await expect.poll(() => app.evaluate(({ app }) => app.dock.isVisible())).toBe(true);
     }
+  } finally {
+    await app.close();
+  }
+});
+
+test("归档便签显示 checkbox 并可恢复", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-archive-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+    const noteWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const noteWindow = await noteWindowCreated;
+    await noteWindow.waitForLoadState("domcontentloaded");
+    const noteId = new URL(noteWindow.url()).searchParams.get("noteId");
+    if (!noteId) throw new Error("便签 id 不存在");
+
+    await noteWindow.bringToFront();
+    await app.evaluate(({ BrowserWindow, Menu }, url) => {
+      const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      const item = Menu.getApplicationMenu()?.getMenuItemById("toggle-archive");
+      if (!target || !item?.click) throw new Error("归档快捷键菜单项不可用");
+      target.focus();
+      item.click(item, target, {});
+    }, noteWindow.url());
+
+    const checkbox = noteWindow.locator(".note-archive-checkbox");
+    await expect(checkbox).toBeChecked();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
+    await mainWindow.locator(".main-note-view button").nth(1).click();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await noteWindow.screenshot({ path: "/private/tmp/pinote-archive.png" });
+
+    await checkbox.click();
+    await expect(checkbox).toHaveCount(0);
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
+    await mainWindow.locator(".main-note-view button").first().click();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await expect.poll(() => noteWindow.evaluate(async (id) => (
+      (await window.noteAPI.getNote(id)).note?.archivedAt
+    ), noteId)).toBeNull();
   } finally {
     await app.close();
   }

@@ -16,7 +16,7 @@ export function InlineShelf({ activeId }: InlineShelfProps) {
     return window.noteAPI.onNoteList(setNotes);
   }, []);
 
-  const dockedNotes = notes.filter((note) => note.dockState === "inline");
+  const dockedNotes = notes.filter((note) => note.archivedAt === null && note.dockState === "inline");
 
   return (
     <aside className="inline-shelf" aria-label="便签列表">

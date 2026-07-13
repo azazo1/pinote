@@ -22,6 +22,7 @@ describe("shortcut settings", () => {
     expect(settings["open-main-window"]).toEqual({ accelerator: "Control+K", global: true });
     expect(settings["new-note"]).toEqual({ accelerator: "Control+Shift+N", global: true });
     expect(settings["close-window"]).toEqual({ accelerator: "CommandOrControl+W", global: false });
+    expect(settings["toggle-archive"]).toEqual({ accelerator: "CommandOrControl+Shift+M", global: false });
   });
 
   it("rejects duplicate shortcuts and clears global state", () => {

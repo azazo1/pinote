@@ -43,11 +43,15 @@ export default function App() {
   const manualTags = useRef<string[]>([]);
   const inlineTagsRef = useRef<string[]>([]);
   const collapsedRef = useRef(false);
+  const archivedRef = useRef(false);
+  const noteLoadedRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<NoteEditorHandle>(null);
   const initialFocusApplied = useRef(false);
 
   collapsedRef.current = note?.collapsed ?? false;
+  archivedRef.current = note?.archivedAt != null;
+  noteLoadedRef.current = note !== null;
 
   const setCurrentInlineTags = useCallback((tags: string[]) => {
     if (equalTags(inlineTagsRef.current, tags)) return;
@@ -219,6 +223,19 @@ export default function App() {
     void flushPendingPatch().then(() => window.noteAPI.closeNote(noteId));
   }, [flushPendingPatch, noteId]);
 
+  const setArchived = useCallback(async (archived: boolean) => {
+    await flushPendingPatch();
+    const updated = await window.noteAPI.setNoteArchived(noteId, archived);
+    if (!updated) return;
+    contentRevision.current = updated.revision;
+    setNote(updated);
+  }, [flushPendingPatch, noteId]);
+
+  const toggleArchive = useCallback(() => {
+    if (!noteLoadedRef.current) return;
+    void setArchived(!archivedRef.current);
+  }, [setArchived]);
+
   const focusAfterExpand = useCallback((focus: () => void) => {
     if (!collapsedRef.current) {
       focus();
@@ -268,6 +285,7 @@ export default function App() {
         case "toggle-dock": toggleDock(); break;
         case "toggle-color-picker": toggleColorPicker(); break;
         case "toggle-metadata": toggleMetadata(); break;
+        case "toggle-archive": toggleArchive(); break;
       }
     });
     const offRemote = window.noteAPI.onRemoteNote((remote) => {
@@ -314,6 +332,7 @@ export default function App() {
     toggleDock,
     toggleMetadata,
     togglePinned,
+    toggleArchive,
     toggleSync,
   ]);
 
@@ -349,6 +368,7 @@ export default function App() {
         title={note.title}
         pinned={note.pinned}
         docked={docked}
+        archived={note.archivedAt !== null}
         onToggleDock={toggleDock}
         onTogglePinned={togglePinned}
         onClose={closeWindow}
@@ -379,19 +399,31 @@ export default function App() {
       {syncOpen && <SyncPanel status={syncStatus} onClose={() => setSyncOpen(false)} onStatus={setSyncStatus} />}
 
       <section className="note-content">
-        <input
-          ref={titleInputRef}
-          className="title-input"
-          value={note.title}
-          onChange={(event) => applyContentPatch({ title: event.target.value })}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            editorRef.current?.focus();
-          }}
-          placeholder="标题"
-          aria-label="标题"
-        />
+        <div className="note-title-row">
+          {note.archivedAt !== null && (
+            <input
+              className="note-archive-checkbox"
+              type="checkbox"
+              checked
+              aria-label="恢复为活跃便签"
+              title="恢复为活跃便签"
+              onChange={() => void setArchived(false)}
+            />
+          )}
+          <input
+            ref={titleInputRef}
+            className="title-input"
+            value={note.title}
+            onChange={(event) => applyContentPatch({ title: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              editorRef.current?.focus();
+            }}
+            placeholder="标题"
+            aria-label="标题"
+          />
+        </div>
         <NoteEditor
           ref={editorRef}
           autoFocus={initialFocus !== "title"}
@@ -413,6 +445,8 @@ export default function App() {
             onClick={toggleMetadata}
           />
           <NoteMenu
+            archived={note.archivedAt !== null}
+            onToggleArchive={toggleArchive}
             onCreate={() => void window.noteAPI.createNote()}
             onOpenColorPicker={toggleColorPicker}
             onOpenMainWindow={() => void window.noteAPI.openMainWindow()}

@@ -1,4 +1,4 @@
-import { ArrowUpRight, Pin, Trash2 } from "lucide-react";
+import { ArchiveRestore, ArrowUpRight, CircleCheckBig, Pin, Trash2 } from "lucide-react";
 import { useMemo, type CSSProperties } from "react";
 import type { NoteSummary } from "../types";
 import { noteColors } from "./ColorPicker";
@@ -6,11 +6,13 @@ import { noteColors } from "./ColorPicker";
 interface MainNoteListProps {
   notes: NoteSummary[];
   deletingId: string | null;
+  updatingId: string | null;
   onOpen: (id: string) => void;
+  onSetArchived: (id: string, archived: boolean) => void;
   onDelete: (id: string) => void;
 }
 
-export function MainNoteList({ notes, deletingId, onOpen, onDelete }: MainNoteListProps) {
+export function MainNoteList({ notes, deletingId, updatingId, onOpen, onSetArchived, onDelete }: MainNoteListProps) {
   return (
     <div className="main-note-list" role="list">
       {notes.map((note) => (
@@ -18,7 +20,9 @@ export function MainNoteList({ notes, deletingId, onOpen, onDelete }: MainNoteLi
           key={note.id}
           note={note}
           deleting={deletingId === note.id}
+          updating={updatingId === note.id}
           onOpen={onOpen}
+          onSetArchived={onSetArchived}
           onDelete={onDelete}
         />
       ))}
@@ -29,11 +33,13 @@ export function MainNoteList({ notes, deletingId, onOpen, onDelete }: MainNoteLi
 interface MainNoteRowProps {
   note: NoteSummary;
   deleting: boolean;
+  updating: boolean;
   onOpen: (id: string) => void;
+  onSetArchived: (id: string, archived: boolean) => void;
   onDelete: (id: string) => void;
 }
 
-function MainNoteRow({ note, deleting, onOpen, onDelete }: MainNoteRowProps) {
+function MainNoteRow({ note, deleting, updating, onOpen, onSetArchived, onDelete }: MainNoteRowProps) {
   const palette = noteColors[note.color as keyof typeof noteColors] ?? noteColors.lemon;
   const excerpt = useMemo(() => markdownExcerpt(note.markdown), [note.markdown]);
   const groupName = note.groupName.trim();
@@ -75,6 +81,16 @@ function MainNoteRow({ note, deleting, onOpen, onDelete }: MainNoteRowProps) {
         <time dateTime={new Date(note.modifiedAt).toISOString()}>{modifiedLabel(note.modifiedAt)}</time>
       </button>
       <div className="main-note-actions">
+        <button
+          className="main-row-action"
+          type="button"
+          aria-label={note.archivedAt === null ? "标记完成" : "恢复为活跃便签"}
+          title={note.archivedAt === null ? "标记完成" : "恢复为活跃便签"}
+          disabled={updating}
+          onClick={() => onSetArchived(note.id, note.archivedAt === null)}
+        >
+          {note.archivedAt === null ? <CircleCheckBig size={15} /> : <ArchiveRestore size={15} />}
+        </button>
         <button className="main-row-action" type="button" aria-label="打开便签" title="打开便签" onClick={() => onOpen(note.id)}>
           <ArrowUpRight size={15} />
         </button>

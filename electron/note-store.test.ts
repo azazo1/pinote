@@ -56,6 +56,31 @@ describe("NoteStore", () => {
     await store.save();
   });
 
+  it("persists archive state and excludes archived notes from dock lists", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath);
+    await store.load();
+    const note = store.createNote();
+    store.setDockState(note.id, "shelf");
+
+    const archived = store.setArchived(note.id, true);
+
+    expect(archived.archivedAt).toBeGreaterThan(0);
+    expect(store.listSummaries()[0].archivedAt).toBe(archived.archivedAt);
+    expect(store.listDockedNotes("shelf")).toEqual([]);
+    expect(store.setDockState(note.id, "inline")).toBeNull();
+    expect(store.buildSyncRequest().changes[0].archivedAt).toBe(archived.archivedAt);
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+    expect(restored.getNote(note.id).archivedAt).toBe(archived.archivedAt);
+
+    const active = restored.setArchived(note.id, false);
+    expect(active.archivedAt).toBeNull();
+    expect(restored.buildSyncRequest().changes[0].archivedAt).toBeNull();
+  });
+
   it("tracks dock membership independently for each note", async () => {
     const dataPath = testStorePath();
     const store = new NoteStore(dataPath);
@@ -121,7 +146,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(8);
+    expect(restored.state.version).toBe(9);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -177,7 +202,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(8);
+    expect(restored.state.version).toBe(9);
     expect(restored.getShelfPlacement(101)).toEqual({ x: 1, y: 0.32, edge: "right" });
     expect(restored.state.shelf).not.toHaveProperty("positions");
   });
@@ -353,6 +378,7 @@ describe("NoteStore", () => {
       color: "lemon",
       groupName: "工作",
       tags: ["同步"],
+      archivedAt: null,
       revision: 1,
       modifiedAt: Date.now(),
       modifiedBy: "remote-device",
@@ -400,7 +426,7 @@ describe("NoteStore", () => {
     await store.save();
   });
 
-  it("loads legacy notes with empty group and tags", async () => {
+  it("loads legacy notes with empty metadata and active archive state", async () => {
     const dataPath = testStorePath();
     const legacy = new NoteStore(dataPath);
     await legacy.load();
@@ -408,13 +434,14 @@ describe("NoteStore", () => {
     legacy.state.version = 5;
     delete legacy.getNote(note.id).groupName;
     delete legacy.getNote(note.id).tags;
+    delete legacy.getNote(note.id).archivedAt;
     await legacy.save();
 
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(8);
-    expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [] });
+    expect(restored.state.version).toBe(9);
+    expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [], archivedAt: null });
   });
 
   it("migrates version 7 data with default preferences", async () => {
@@ -428,7 +455,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath, "linux");
     await restored.load();
 
-    expect(restored.state.version).toBe(8);
+    expect(restored.state.version).toBe(9);
     expect(restored.getPreferences()).toMatchObject({
       showMainOnLogin: true,
       closeMainToTray: true,

@@ -656,6 +656,17 @@ export class WindowManager {
     log.info(pinned ? "便签已置顶" : "便签已取消置顶", { id });
   }
 
+  setNoteArchived(id, archived) {
+    const note = this.store.getNote(id);
+    if (!note) return null;
+    if (archived && this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: true });
+    const updated = this.store.setArchived(id, archived);
+    this.reconcileDockSurface();
+    this.broadcastNoteList();
+    this.sendGroupState();
+    return updated;
+  }
+
   applyPinnedLevel(window, pinned) {
     window.setAlwaysOnTop(Boolean(pinned), "floating");
   }
@@ -677,7 +688,8 @@ export class WindowManager {
   }
 
   toggleNoteDock(id) {
-    if (!this.store.getNote(id)) return { note: null, group: this.getGroupState() };
+    const note = this.store.getNote(id);
+    if (!note || note.archivedAt !== null) return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
     if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: true });
     else this.dockNote(id);
     return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
@@ -685,7 +697,7 @@ export class WindowManager {
 
   dockNote(id, { animate = false, persist = true } = {}) {
     const note = this.store.getNote(id);
-    if (!note || this.store.isDocked(id)) return false;
+    if (!note || note.archivedAt !== null || this.store.isDocked(id)) return false;
     let window = this.windows.get(id);
     if (!window || window.isDestroyed()) {
       this.store.updateWindow(id, { open: true });
@@ -1283,6 +1295,9 @@ export class WindowManager {
       }
     }
     for (const note of this.store.state.notes) {
+      if (note.archivedAt !== null && this.store.getDockState(note.id) !== "free") {
+        this.detachDockedNote(note.id, { restoreBounds: true });
+      }
       const state = this.store.getWindowState(note.id);
       if (!state.open) continue;
       const window = this.windows.get(note.id);

@@ -52,6 +52,7 @@ export const SHORTCUT_COMMANDS = Object.freeze([
   { id: "toggle-dock", label: "切换侧边收纳", group: "note", globalEligible: false },
   { id: "toggle-color-picker", label: "便签颜色", group: "note", globalEligible: false },
   { id: "toggle-metadata", label: "分组与标签", group: "note", globalEligible: false },
+  { id: "toggle-archive", label: "归档或恢复便签", group: "note", globalEligible: false },
 ]);
 
 const COMMAND_BY_ID = new Map(SHORTCUT_COMMANDS.map((command) => [command.id, command]));
@@ -72,6 +73,7 @@ export function defaultShortcutBindings(platform = process.platform) {
     "toggle-dock": { accelerator: "CommandOrControl+Shift+D", global: false },
     "toggle-color-picker": { accelerator: "CommandOrControl+Shift+C", global: false },
     "toggle-metadata": { accelerator: "CommandOrControl+Shift+T", global: false },
+    "toggle-archive": { accelerator: "CommandOrControl+Shift+M", global: false },
   };
 }
 

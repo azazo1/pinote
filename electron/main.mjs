@@ -24,6 +24,7 @@ const NOTE_COMMANDS = new Set([
   "toggle-dock",
   "toggle-color-picker",
   "toggle-metadata",
+  "toggle-archive",
 ]);
 
 if (process.platform === "linux") app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
@@ -161,6 +162,11 @@ function registerIpc() {
     windows.remove(id);
     sync.schedule();
   });
+  ipcMain.handle("note:set-archived", (_event, id, archived) => {
+    const note = windows.setNoteArchived(validId(id), Boolean(archived));
+    if (note) sync.schedule();
+    return note;
+  });
   ipcMain.handle("window:open-main", () => windows.openMainWindow() !== null);
   ipcMain.handle("app:request-quit", (event) => confirmAndQuit(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle("window:toggle-collapse", (_event, id) => windows.toggleCollapse(validId(id)));
@@ -266,6 +272,7 @@ function installMenu(bindings) {
         item("toggle-dock", "切换当前便签的侧边收纳"),
         item("toggle-color-picker"),
         item("toggle-metadata"),
+        item("toggle-archive"),
       ],
     },
     {

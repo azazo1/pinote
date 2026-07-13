@@ -7,6 +7,7 @@ interface TitleBarProps {
   title: string;
   pinned: boolean;
   docked: boolean;
+  archived: boolean;
   onToggleDock: () => void;
   onTogglePinned: () => void;
   onClose: () => void;
@@ -67,12 +68,14 @@ export function TitleBar(props: TitleBarProps) {
     >
       <span className="collapsed-title">{props.title || "无标题"}</span>
       <div className="window-actions">
-        <IconButton
-          icon={props.docked ? PanelRightOpen : PanelRightClose}
-          label={props.docked ? "移出侧边" : "收纳到侧边"}
-          active={props.docked}
-          onClick={props.onToggleDock}
-        />
+        {!props.archived && (
+          <IconButton
+            icon={props.docked ? PanelRightOpen : PanelRightClose}
+            label={props.docked ? "移出侧边" : "收纳到侧边"}
+            active={props.docked}
+            onClick={props.onToggleDock}
+          />
+        )}
         <IconButton icon={Pin} label="置顶" active={props.pinned} onClick={props.onTogglePinned} />
         <IconButton icon={X} label="关闭便签" onClick={props.onClose} />
       </div>

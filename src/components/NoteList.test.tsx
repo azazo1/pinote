@@ -105,6 +105,7 @@ function createNote(id: string, title: string): NoteSummary {
     color: "lemon",
     groupName: "",
     tags: [],
+    archivedAt: null,
     modifiedAt: 0,
     open: true,
     pinned: false,

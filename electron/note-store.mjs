@@ -4,7 +4,7 @@ import path from "node:path";
 import log from "electron-log/main.js";
 import { defaultShortcutBindings, normalizeShortcutBindings } from "./shortcut-settings.mjs";
 
-const CURRENT_VERSION = 8;
+const CURRENT_VERSION = 9;
 const DEFAULT_COLOR = "lemon";
 const NOTE_COLORS = new Set(["lemon", "mint", "coral", "sky", "paper"]);
 const DEFAULT_SHELF_PLACEMENT = Object.freeze({ x: 1, y: 0.5, edge: "right" });
@@ -66,6 +66,7 @@ export class NoteStore {
         color: note.color,
         groupName: note.groupName,
         tags: note.tags,
+        archivedAt: note.archivedAt,
         modifiedAt: note.modifiedAt,
         open: this.getWindowState(note.id).open,
         pinned: this.getWindowState(note.id).pinned,
@@ -89,6 +90,7 @@ export class NoteStore {
     if (mode !== undefined && dockState === null) return [];
     return this.state.notes
       .filter((note) => {
+        if (note.archivedAt !== null) return false;
         const state = this.getWindowState(note.id).dockState;
         return dockState === null ? state !== "free" : state === dockState;
       })
@@ -104,6 +106,7 @@ export class NoteStore {
       color: this.state.preferences.defaultNoteColor,
       groupName: "",
       tags: [],
+      archivedAt: null,
       revision: 0,
       modifiedAt: now,
       modifiedBy: this.state.deviceId,
@@ -153,6 +156,20 @@ export class NoteStore {
     return this.getRenderableNote(id);
   }
 
+  setArchived(id, archived) {
+    const note = this.getNote(id);
+    if (!note) return null;
+    const nextArchivedAt = archived ? Date.now() : null;
+    if ((note.archivedAt !== null) === Boolean(archived)) return this.getRenderableNote(id);
+    note.archivedAt = nextArchivedAt;
+    note.modifiedAt = nextArchivedAt ?? Date.now();
+    note.modifiedBy = this.state.deviceId;
+    note.dirty = true;
+    void this.save();
+    log.info(archived ? "便签已归档" : "便签已恢复", { id });
+    return this.getRenderableNote(id);
+  }
+
   updateWindow(id, patch) {
     if (!this.getNote(id)) return null;
     const current = this.getWindowState(id);
@@ -162,7 +179,8 @@ export class NoteStore {
   }
 
   setDockState(id, dockState) {
-    if (!this.getNote(id) || !DOCK_STATES.has(dockState)) return null;
+    const note = this.getNote(id);
+    if (!note || !DOCK_STATES.has(dockState) || (note.archivedAt !== null && dockState !== "free")) return null;
     return this.updateWindow(id, { dockState });
   }
 
@@ -229,6 +247,7 @@ export class NoteStore {
         color: note.color,
         groupName: note.groupName,
         tags: [...note.tags],
+        archivedAt: note.archivedAt,
         baseRevision: note.revision,
         modifiedAt: note.modifiedAt,
         modifiedBy: note.modifiedBy,
@@ -352,7 +371,9 @@ function normalizeState(value, platform = process.platform) {
         collapsed: legacy.collapsed,
         pinned: legacy.pinned,
       }),
-      dockState: legacyDockState ?? value?.windows?.[note.id]?.dockState,
+      dockState: note.archivedAt === null
+        ? legacyDockState ?? value?.windows?.[note.id]?.dockState
+        : "free",
     });
   }
   return {
@@ -389,6 +410,7 @@ function normalizeContentNote(note, deviceId) {
     color: typeof note.color === "string" ? note.color : DEFAULT_COLOR,
     groupName: normalizeGroupName(note.groupName),
     tags: normalizeTags(note.tags),
+    archivedAt: normalizeArchivedAt(note.archivedAt),
     revision: Number.isInteger(note.revision) && note.revision >= 0 ? note.revision : 0,
     modifiedAt: Number.isFinite(note.modifiedAt) ? note.modifiedAt : Number.isFinite(note.updatedAt) ? note.updatedAt : Date.now(),
     modifiedBy: typeof note.modifiedBy === "string" ? note.modifiedBy : deviceId,
@@ -497,6 +519,10 @@ function equalStringArrays(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function normalizeArchivedAt(value) {
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function contentMatchesChange(note, change) {
   return note.id === change.id &&
     note.title === change.title &&
@@ -504,6 +530,7 @@ function contentMatchesChange(note, change) {
     note.color === change.color &&
     note.groupName === change.groupName &&
     equalStringArrays(note.tags, change.tags) &&
+    note.archivedAt === normalizeArchivedAt(change.archivedAt) &&
     note.revision === change.baseRevision &&
     note.modifiedAt === change.modifiedAt &&
     note.modifiedBy === change.modifiedBy;
@@ -516,6 +543,7 @@ function remoteMatchesChange(note, change) {
     note.color === change.color &&
     note.groupName === change.groupName &&
     equalStringArrays(note.tags, change.tags) &&
+    note.archivedAt === normalizeArchivedAt(change.archivedAt) &&
     note.modifiedAt === change.modifiedAt &&
     note.modifiedBy === change.modifiedBy;
 }
@@ -544,6 +572,7 @@ function isRemoteNote(value) {
     typeof value.groupName === "string" &&
     Array.isArray(value.tags) &&
     value.tags.every((tag) => typeof tag === "string") &&
+    (value.archivedAt === null || (Number.isFinite(value.archivedAt) && value.archivedAt > 0)) &&
     Number.isInteger(value.revision) &&
     Number.isFinite(value.modifiedAt) &&
     typeof value.modifiedBy === "string",

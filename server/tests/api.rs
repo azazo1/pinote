@@ -46,6 +46,7 @@ fn change(id: &str, title: &str, markdown: &str, base_revision: i64, modified_at
         "color": "lemon",
         "groupName": "工作",
         "tags": ["重要", "本周"],
+        "archivedAt": null,
         "baseRevision": base_revision,
         "modifiedAt": modified_at,
         "modifiedBy": "device-a"
@@ -212,6 +213,7 @@ async fn note_metadata_updates_revision_and_participates_in_conflict_identity() 
     let mut updated = change("note-1", "标题", "内容", 1, 2_000);
     updated["groupName"] = json!("个人");
     updated["tags"] = json!(["稍后", "引号\"与\\路径"]);
+    updated["archivedAt"] = json!(1_900);
     let (_, response) = send_sync(
         app.clone(),
         TOKEN,
@@ -220,6 +222,7 @@ async fn note_metadata_updates_revision_and_participates_in_conflict_identity() 
     .await;
     assert_eq!(response["notes"][0]["revision"], 2);
     assert_eq!(response["notes"][0]["groupName"], "个人");
+    assert_eq!(response["notes"][0]["archivedAt"], 1_900);
     assert_eq!(
         response["notes"][0]["tags"],
         json!(["稍后", "引号\"与\\路径"])

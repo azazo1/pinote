@@ -40,6 +40,7 @@ struct NoteRow {
     color: String,
     group_name: String,
     tags_json: String,
+    archived_at: Option<i64>,
     revision: i64,
     modified_at: i64,
     modified_by: String,
@@ -108,7 +109,7 @@ impl Store {
         }
 
         let notes = sqlx::query_as::<_, NoteRow>(
-            "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by \
+            "SELECT id, title, markdown, color, group_name, tags_json, archived_at, revision, modified_at, modified_by \
              FROM notes ORDER BY revision, id",
         )
         .fetch_all(&mut *transaction)
@@ -140,7 +141,7 @@ async fn apply_change(
     conflicts: &mut Vec<SyncNote>,
 ) -> Result<(), StoreError> {
     let current = sqlx::query_as::<_, NoteRow>(
-        "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by \
+        "SELECT id, title, markdown, color, group_name, tags_json, archived_at, revision, modified_at, modified_by \
          FROM notes WHERE id = ?",
     )
     .bind(&change.id)
@@ -156,13 +157,14 @@ async fn apply_change(
             let tags_json = serde_json::to_string(&change.tags)?;
             sqlx::query(
                 "UPDATE notes SET title = ?, markdown = ?, color = ?, group_name = ?, \
-                 tags_json = ?, revision = ?, modified_at = ?, modified_by = ? WHERE id = ?",
+                 tags_json = ?, archived_at = ?, revision = ?, modified_at = ?, modified_by = ? WHERE id = ?",
             )
             .bind(&change.title)
             .bind(&change.markdown)
             .bind(&change.color)
             .bind(&change.group_name)
             .bind(tags_json)
+            .bind(change.archived_at)
             .bind(revision)
             .bind(change.modified_at)
             .bind(&change.modified_by)
@@ -187,8 +189,8 @@ async fn apply_change(
         let tags_json = serde_json::to_string(&change.tags)?;
         sqlx::query(
             "INSERT INTO notes \
-             (id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, title, markdown, color, group_name, tags_json, archived_at, revision, modified_at, modified_by) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&change.id)
         .bind(&change.title)
@@ -196,6 +198,7 @@ async fn apply_change(
         .bind(&change.color)
         .bind(&change.group_name)
         .bind(tags_json)
+        .bind(change.archived_at)
         .bind(revision)
         .bind(change.modified_at)
         .bind(&change.modified_by)
@@ -214,10 +217,10 @@ async fn insert_or_find_conflict(
     let title = conflict_title(&change.title);
     let tags_json = serde_json::to_string(&change.tags)?;
     let existing = sqlx::query_as::<_, NoteRow>(
-        "SELECT id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by FROM notes \
+        "SELECT id, title, markdown, color, group_name, tags_json, archived_at, revision, modified_at, modified_by FROM notes \
          WHERE conflict_source_id = ? AND conflict_base_revision = ? AND title = ? \
          AND markdown = ? AND color = ? AND group_name = ? AND tags_json = ? \
-         AND modified_at = ? AND modified_by = ? \
+         AND archived_at IS ? AND modified_at = ? AND modified_by = ? \
          ORDER BY revision LIMIT 1",
     )
     .bind(&change.id)
@@ -227,6 +230,7 @@ async fn insert_or_find_conflict(
     .bind(&change.color)
     .bind(&change.group_name)
     .bind(&tags_json)
+    .bind(change.archived_at)
     .bind(change.modified_at)
     .bind(&change.modified_by)
     .fetch_optional(&mut **transaction)
@@ -239,9 +243,9 @@ async fn insert_or_find_conflict(
     let revision = next_revision(transaction).await?;
     sqlx::query(
         "INSERT INTO notes \
-         (id, title, markdown, color, group_name, tags_json, revision, modified_at, modified_by, \
+         (id, title, markdown, color, group_name, tags_json, archived_at, revision, modified_at, modified_by, \
           conflict_source_id, conflict_base_revision) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&title)
@@ -249,6 +253,7 @@ async fn insert_or_find_conflict(
     .bind(&change.color)
     .bind(&change.group_name)
     .bind(&tags_json)
+    .bind(change.archived_at)
     .bind(revision)
     .bind(change.modified_at)
     .bind(&change.modified_by)
@@ -264,6 +269,7 @@ async fn insert_or_find_conflict(
         color: change.color.clone(),
         group_name: change.group_name.clone(),
         tags: change.tags.clone(),
+        archived_at: change.archived_at,
         revision,
         modified_at: change.modified_at,
         modified_by: change.modified_by.clone(),
@@ -336,6 +342,7 @@ impl NoteRow {
             && self.color == change.color
             && self.group_name == change.group_name
             && tags == change.tags
+            && self.archived_at == change.archived_at
             && self.modified_at == change.modified_at
             && self.modified_by == change.modified_by)
     }
@@ -353,6 +360,7 @@ impl TryFrom<NoteRow> for SyncNote {
             color: value.color,
             group_name: value.group_name,
             tags,
+            archived_at: value.archived_at,
             revision: value.revision,
             modified_at: value.modified_at,
             modified_by: value.modified_by,

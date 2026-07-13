@@ -225,6 +225,7 @@ button {
 
 .icon-button:focus-visible,
 .color-swatch:focus-visible,
+.note-archive-checkbox:focus-visible,
 .title-input:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--note-ink) 46%, transparent);
   outline-offset: -2px;
@@ -576,8 +577,41 @@ button {
   padding: 0 10px;
 }
 
+.note-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-archive-checkbox {
+  position: relative;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin: 4px 0 1px;
+  background: color-mix(in srgb, var(--note-ink) 30%, var(--note-body));
+  border: 1px solid color-mix(in srgb, var(--note-ink) 24%, transparent);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.note-archive-checkbox::after {
+  position: absolute;
+  top: 3px;
+  left: 7px;
+  width: 5px;
+  height: 10px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
 .title-input {
-  width: 100%;
+  width: auto;
+  flex: 1;
   min-width: 0;
   padding: 4px 0 1px;
   color: var(--note-ink);

@@ -5,6 +5,7 @@ export interface Note {
   color: string;
   groupName: string;
   tags: string[];
+  archivedAt: number | null;
   revision: number;
   modifiedAt: number;
   modifiedBy: string;
@@ -22,6 +23,7 @@ export interface NoteSummary {
   color: string;
   groupName: string;
   tags: string[];
+  archivedAt: number | null;
   modifiedAt: number;
   open: boolean;
   pinned: boolean;
@@ -68,7 +70,8 @@ export type AppCommand =
   | "toggle-pin"
   | "toggle-dock"
   | "toggle-color-picker"
-  | "toggle-metadata";
+  | "toggle-metadata"
+  | "toggle-archive";
 
 export type ShortcutCommandId =
   | "open-main-window"
@@ -83,7 +86,8 @@ export type ShortcutCommandId =
   | "toggle-pin"
   | "toggle-dock"
   | "toggle-color-picker"
-  | "toggle-metadata";
+  | "toggle-metadata"
+  | "toggle-archive";
 
 export interface GeneralSettings {
   launchAtLogin: boolean;
@@ -129,6 +133,7 @@ export interface NoteAPI {
   closeNote: (id: string) => Promise<boolean>;
   openNote: (id: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;
+  setNoteArchived: (id: string, archived: boolean) => Promise<Note | null>;
   openMainWindow: () => Promise<boolean>;
   requestQuit: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;

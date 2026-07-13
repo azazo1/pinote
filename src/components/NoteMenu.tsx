@@ -1,5 +1,7 @@
 import {
   AppWindow,
+  ArchiveRestore,
+  CircleCheckBig,
   Cloud,
   Ellipsis,
   Palette,
@@ -14,6 +16,8 @@ interface NoteMenuProps {
   onOpenColorPicker: () => void;
   onOpenMainWindow: () => void;
   onOpenSync: () => void;
+  archived: boolean;
+  onToggleArchive: () => void;
   onDelete: () => void;
 }
 
@@ -115,6 +119,11 @@ export function NoteMenu(props: NoteMenuProps) {
           <MenuItem icon={AppWindow} label="打开主窗口" onSelect={() => select(props.onOpenMainWindow)} />
           <MenuItem icon={Cloud} label="云同步" onSelect={() => select(props.onOpenSync)} />
           <div className="note-menu-separator" role="separator" />
+          <MenuItem
+            icon={props.archived ? ArchiveRestore : CircleCheckBig}
+            label={props.archived ? "恢复为活跃便签" : "标记完成"}
+            onSelect={() => select(props.onToggleArchive)}
+          />
           <MenuItem icon={Trash2} label="删除便签" danger onSelect={() => select(props.onDelete)} />
         </div>
       )}
