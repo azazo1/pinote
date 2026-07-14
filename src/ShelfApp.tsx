@@ -309,7 +309,7 @@ export default function ShelfApp() {
           </div>
           <div className="shelf-actions">
             <IconButton icon={AppWindow} label="打开主窗口" onClick={() => void window.noteAPI.openMainWindow()} />
-            <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createNote()} />
+            <IconButton icon={Plus} label="新建便签" onClick={() => void window.noteAPI.createDockedNote()} />
           </div>
         </div>
         <NoteList

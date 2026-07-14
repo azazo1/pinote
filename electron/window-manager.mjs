@@ -339,6 +339,13 @@ export class WindowManager {
     return note;
   }
 
+  createDockedNote() {
+    const note = this.store.createNote();
+    this.open(note, { initialFocus: "title" });
+    this.dockNote(note.id, { persist: false });
+    return this.store.getRenderableNote(note.id);
+  }
+
   toggleCollapse(id) {
     const state = this.store.getWindowState(id);
     const window = this.windows.get(id);

@@ -24,6 +24,23 @@ test("侧边架全屏拖放和收纳动画", async () => {
     await shelf.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
     await expect.poll(() => shelf.evaluate(() => window.innerWidth), { timeout: 2_500 }).toBe(200);
 
+    const existingIds = await shelf.evaluate(async () => (await window.noteAPI.listNotes()).map((note) => note.id));
+    await shelf.getByRole("button", { name: "新建便签" }).click();
+    await expect(shelf.locator(".note-list-item")).toHaveCount(3);
+    const createdId = await shelf.evaluate(async (ids) => (
+      (await window.noteAPI.listNotes()).find((note) => !ids.includes(note.id))?.id ?? null
+    ), existingIds);
+    expect(createdId).not.toBeNull();
+    await expect.poll(() => shelf.evaluate(async (id) => {
+      const note = id ? (await window.noteAPI.getNote(id)).note : null;
+      return note ? { dockState: note.dockState, open: note.open } : null;
+    }, createdId)).toEqual({ dockState: "shelf", open: true });
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))?.isVisible()
+    ), createdId)).toBe(false);
+    await shelf.locator(`[data-note-id="${createdId}"] .note-list-close`).click();
+    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+
     const platform = await app.evaluate(() => process.platform);
     if (platform === "darwin") {
       await app.evaluate(({ BrowserWindow }, url) => {

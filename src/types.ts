@@ -130,6 +130,7 @@ export interface NoteAPI {
     baseRevision?: number,
   ) => Promise<Note | null>;
   createNote: () => Promise<Note>;
+  createDockedNote: () => Promise<Note>;
   closeNote: (id: string) => Promise<boolean>;
   openNote: (id: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;

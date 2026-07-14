@@ -146,6 +146,11 @@ function registerIpc() {
     sync.schedule();
     return note;
   });
+  ipcMain.handle("note:create-docked", () => {
+    const note = windows.createDockedNote();
+    sync.schedule();
+    return note;
+  });
   ipcMain.handle("note:open", (_event, id) => windows.openNote(validId(id)));
   ipcMain.on("note:flush-complete", (event, requestId, succeeded) => {
     windows.completePendingNoteFlush(event.sender.id, requestId, succeeded);

@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   getNote: (id) => ipcRenderer.invoke("note:get", id),
   updateNote: (id, patch, baseRevision) => ipcRenderer.invoke("note:update", id, patch, baseRevision),
   createNote: () => ipcRenderer.invoke("note:create"),
+  createDockedNote: () => ipcRenderer.invoke("note:create-docked"),
   openNote: (id) => ipcRenderer.invoke("note:open", id),
   closeNote: (id) => ipcRenderer.invoke("note:close", id),
   deleteNote: (id) => ipcRenderer.invoke("note:delete", id),
