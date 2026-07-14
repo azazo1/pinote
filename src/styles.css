@@ -1205,6 +1205,28 @@ button {
   pointer-events: none;
 }
 
+.shelf-repeat-click-guard {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  right: 0;
+  width: 36px;
+  height: 36px;
+  cursor: default;
+  transform: translateY(-50%);
+}
+
+.shelf-shell.is-left .shelf-repeat-click-guard {
+  right: auto;
+  left: 0;
+}
+
+.shelf-shell.is-free .shelf-repeat-click-guard {
+  right: auto;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .shelf-shell.is-expanded .shelf-content {
   opacity: 1;
   pointer-events: auto;

@@ -6,6 +6,7 @@ import { shouldStartShelfDrag } from "./lib/shelf-drag";
 import type { NoteSummary, ShelfPlacementEdge, WindowBounds } from "./types";
 
 const SHELF_HOVER_EXPAND_DELAY_MS = 720;
+const SHELF_REPEAT_CLICK_IDLE_MS = 500;
 
 interface ShelfDrag {
   expandsOnClick: boolean;
@@ -20,6 +21,7 @@ interface ShelfDrag {
 export default function ShelfApp() {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [expanded, setExpanded] = useState(false);
+  const [repeatClickGuard, setRepeatClickGuard] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
   const [dragReturnIndex, setDragReturnIndex] = useState<number | null>(null);
@@ -29,6 +31,7 @@ export default function ShelfApp() {
     return edge === "left" || edge === "free" ? edge : "right";
   });
   const hoverTimer = useRef<number | null>(null);
+  const repeatClickGuardTimer = useRef<number | null>(null);
   const drag = useRef<ShelfDrag | null>(null);
   const noteDragId = useRef<string | null>(null);
   const noteDragExited = useRef(false);
@@ -43,8 +46,26 @@ export default function ShelfApp() {
     hoverTimer.current = null;
   }
 
-  function expandShelf() {
+  function clearRepeatClickGuard() {
+    if (repeatClickGuardTimer.current !== null) {
+      window.clearTimeout(repeatClickGuardTimer.current);
+      repeatClickGuardTimer.current = null;
+    }
+    setRepeatClickGuard(false);
+  }
+
+  function startRepeatClickGuard() {
+    if (repeatClickGuardTimer.current !== null) window.clearTimeout(repeatClickGuardTimer.current);
+    setRepeatClickGuard(true);
+    repeatClickGuardTimer.current = window.setTimeout(() => {
+      repeatClickGuardTimer.current = null;
+      setRepeatClickGuard(false);
+    }, SHELF_REPEAT_CLICK_IDLE_MS);
+  }
+
+  function expandShelf(protectFromRepeatClick = false) {
     cancelHover();
+    if (protectFromRepeatClick) startRepeatClickGuard();
     setExpanded(true);
     window.noteAPI.setShelfExpanded(true);
   }
@@ -121,7 +142,10 @@ export default function ShelfApp() {
 
     void window.noteAPI.listNotes(true).then(updateNotes);
     const offList = window.noteAPI.onNoteList(updateNotes);
-    const offExpanded = window.noteAPI.onShelfExpanded(setExpanded);
+    const offExpanded = window.noteAPI.onShelfExpanded((nextExpanded) => {
+      setExpanded(nextExpanded);
+      if (!nextExpanded) clearRepeatClickGuard();
+    });
     const offPlacement = window.noteAPI.onShelfPlacement(setPlacement);
     return () => {
       offList();
@@ -148,6 +172,7 @@ export default function ShelfApp() {
       document.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("blur", cancelInteraction);
       cancelHover();
+      if (repeatClickGuardTimer.current !== null) window.clearTimeout(repeatClickGuardTimer.current);
       clearDrag();
     };
   }, []);
@@ -202,7 +227,7 @@ export default function ShelfApp() {
       suppressClick.current = false;
       return;
     }
-    expandShelf();
+    expandShelf(true);
   }
 
   function beginNoteDrag(id: string, screenX: number, screenY: number, sourceBounds: WindowBounds) {
@@ -289,6 +314,13 @@ export default function ShelfApp() {
       >
         <NotebookTabs size={18} aria-hidden="true" />
       </button>
+      {expanded && repeatClickGuard && (
+        <span
+          className="shelf-repeat-click-guard"
+          aria-hidden="true"
+          onPointerDown={startRepeatClickGuard}
+        />
+      )}
       <section className="shelf-content" aria-label="侧边便签架">
         <div className="shelf-heading">
           <div className="shelf-heading-title">

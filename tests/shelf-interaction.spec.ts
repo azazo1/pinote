@@ -21,6 +21,34 @@ test("侧边架全屏拖放和收纳动画", async () => {
     await expect(shelf.locator(".note-list-item")).toHaveCount(2);
 
     await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(36);
+    const collapsedShelfBounds = await shelfBounds(app);
+    await shelf.mouse.click(22, 18);
+    await shelf.waitForTimeout(80);
+    const clickedShelfBounds = await shelfBounds(app);
+    const repeatClickPoint = {
+      x: collapsedShelfBounds.x + 22 - clickedShelfBounds.x,
+      y: collapsedShelfBounds.y + 18 - clickedShelfBounds.y,
+    };
+    expect(await shelf.evaluate(({ x, y }) => (
+      document.elementFromPoint(x, y)?.classList.contains("shelf-repeat-click-guard") ?? false
+    ), repeatClickPoint)).toBe(true);
+    await shelf.mouse.click(repeatClickPoint.x, repeatClickPoint.y);
+    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
+    await shelf.waitForTimeout(300);
+    const expandedAfterRepeatBounds = await shelfBounds(app);
+    const continuedClickPoint = {
+      x: collapsedShelfBounds.x + 22 - expandedAfterRepeatBounds.x,
+      y: collapsedShelfBounds.y + 18 - expandedAfterRepeatBounds.y,
+    };
+    await shelf.mouse.click(continuedClickPoint.x, continuedClickPoint.y);
+    await shelf.waitForTimeout(300);
+    await expect(shelf.locator(".shelf-repeat-click-guard")).toHaveCount(1);
+    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+    await expect(shelf.locator(".shelf-repeat-click-guard")).toHaveCount(0, { timeout: 1_000 });
+
+    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(false));
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(36);
     await shelf.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
     await expect.poll(() => shelf.evaluate(() => window.innerWidth), { timeout: 2_500 }).toBe(200);
 
