@@ -14,6 +14,7 @@ import {
 } from "@codemirror/view";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { emacsMotionTarget, type EmacsMotionKey } from "../editor/emacs-motion";
+import { markdownListIndentKeyBinding } from "../editor/markdown-list-indent";
 import { markdownLinePreview, markdownTagDecorations, type MarkdownReplacement } from "../editor/markdown-preview";
 
 interface NoteEditorProps {
@@ -211,7 +212,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
             autocapitalize: "sentences",
             spellcheck: "true",
           }),
-          keymap.of([...emacsKeymap, ...standardKeymap, ...historyKeymap]),
+          keymap.of([markdownListIndentKeyBinding, ...emacsKeymap, ...standardKeymap, ...historyKeymap]),
           placeholder("写点什么"),
           markdownPreviewPlugin(highlightedTagsRef),
           EditorView.updateListener.of((update) => {

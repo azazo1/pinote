@@ -29,6 +29,44 @@ test("新建便签聚焦标题并用回车进入内容", async () => {
   }
 });
 
+test("Tab and Shift+Tab indent Markdown list items", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-list-indent-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("Main window was not created");
+
+    const noteWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const noteWindow = await noteWindowCreated;
+    const noteId = new URL(noteWindow.url()).searchParams.get("noteId");
+    if (!noteId) throw new Error("Note id is missing");
+
+    await noteWindow.locator(".title-input").press("Enter");
+    const editor = noteWindow.locator(".note-editor .cm-content");
+
+    for (const markdown of ["- unordered", "1. ordered", "- [ ] task"]) {
+      await editor.fill(markdown);
+      await editor.press("End");
+      await editor.press("Tab");
+      await expect.poll(() => noteWindow.evaluate(async (id) => (
+        await window.noteAPI.getNote(id)
+      ).note?.markdown, noteId)).toBe(`  ${markdown}`);
+
+      await editor.press("Shift+Tab");
+      await expect.poll(() => noteWindow.evaluate(async (id) => (
+        await window.noteAPI.getNote(id)
+      ).note?.markdown, noteId)).toBe(markdown);
+    }
+  } finally {
+    await app.close();
+  }
+});
+
 test("编辑侧边便签后切换应用会自动收回", async () => {
   test.skip(process.platform !== "darwin", "仅在 macOS 验证跨应用焦点切换");
   const app = await electron.launch({
