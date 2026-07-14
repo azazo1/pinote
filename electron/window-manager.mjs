@@ -21,17 +21,21 @@ const WINDOW_ANIMATION_MS = 110;
 const SHELF_ANIMATION_MS = SHELF_NOTE_TRANSITION_MS;
 const ANIMATION_FRAME_MS = 16;
 const SHELF_HIDE_DELAY_MS = 700;
-const APP_BLUR_HIDE_DELAY_MS = 80;
 const WINDOW_STATE_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
+const MACOS_WORKSPACE_OPTIONS = {
+  visibleOnFullScreen: true,
+  skipTransformProcessType: true,
+};
 
 export class WindowManager {
-  constructor(store, { requestQuit, showDock, hideDock } = {}) {
+  constructor(store, { requestQuit, showDock, hideDock, isAppActive } = {}) {
     this.store = store;
     this.requestQuit = requestQuit;
     this.showDock = showDock;
     this.hideDock = hideDock;
+    this.isAppActive = isAppActive ?? (() => Boolean(BrowserWindow.getFocusedWindow()));
     this.windows = new Map();
     this.mainWindow = null;
     this.shelfWindow = null;
@@ -43,6 +47,7 @@ export class WindowManager {
     this.animations = new Map();
     this.animatingWindows = new Set();
     this.boundsSaveTimers = new Map();
+    this.workspaceRebindWindows = new Set();
     this.resizeSessions = new Map();
     this.moveSessions = new Map();
     this.shelfNoteDragSession = null;
@@ -230,10 +235,7 @@ export class WindowManager {
 
     this.windows.set(note.id, window);
     if (process.platform === "darwin") {
-      window.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true,
-      });
+      window.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
     }
     this.applyPinnedLevel(window, state.pinned);
     this.loadRenderer(window, {
@@ -243,7 +245,7 @@ export class WindowManager {
 
     window.once("ready-to-show", () => {
       if (!this.store.isDocked(note.id) || (this.getDockMode() === "inline" && this.activeDockedId === note.id)) {
-        window.show();
+        this.showNoteWindow(window);
       }
     });
     window.on("resize", () => this.schedulePersistBounds(note.id));
@@ -252,6 +254,7 @@ export class WindowManager {
     window.on("closed", () => {
       this.cancelAnimation(window);
       this.cancelPendingBounds(note.id);
+      this.workspaceRebindWindows.delete(window.id);
       this.resizeSessions.delete(note.id);
       this.moveSessions.delete(note.id);
       if (this.shelfNoteDragSession?.id === note.id) this.shelfNoteDragSession = null;
@@ -277,8 +280,7 @@ export class WindowManager {
       if (this.store.isDocked(id)) {
         this.activateDockedNote(id);
       } else {
-        window.show();
-        window.focus();
+        this.showNoteWindow(window, { focus: true });
       }
     };
     if (!existing || existing.isDestroyed()) window.once("ready-to-show", activate);
@@ -335,7 +337,7 @@ export class WindowManager {
       for (const id of dockedIds) {
         const window = this.windows.get(id);
         if (!window || window.isDestroyed()) continue;
-        if (id === firstId) window.showInactive();
+        if (id === firstId) this.showNoteWindow(window, { inactive: true });
         else window.hide();
       }
     }
@@ -499,8 +501,7 @@ export class WindowManager {
     const window = this.windows.get(id);
     if (!window || window.isDestroyed() || window.webContents !== sender || window.isFocusable()) return false;
     window.setFocusable(true);
-    window.show();
-    window.focus();
+    this.showNoteWindow(window, { focus: true });
     return true;
   }
 
@@ -559,7 +560,7 @@ export class WindowManager {
   animateNoteIntoShelf(id, window, shelf, expandAfterDrop = false) {
     this.beginNoteTransition(id, window);
     const target = this.shelfNoteTransitionBounds(shelf);
-    window.showInactive();
+    this.showNoteWindow(window, { inactive: true });
     window.moveTop();
     this.animateBounds(window, target, SHELF_NOTE_TRANSITION_MS, () => {
       if (!window.isDestroyed()) window.hide();
@@ -749,8 +750,7 @@ export class WindowManager {
         this.windows.get(this.activeDockedId)?.hide();
       }
       this.activeDockedId = id;
-      window.show();
-      window.focus();
+      this.showNoteWindow(window, { focus: true });
     }
     this.broadcastNoteList();
     this.sendGroupState();
@@ -769,7 +769,7 @@ export class WindowManager {
     if (this.activeDockedId === id) this.activeDockedId = null;
     if (restoreBounds) this.restoreSavedPosition(id, true);
     else if (window && !window.isDestroyed()) {
-      window.showInactive();
+      this.showNoteWindow(window, { inactive: true });
       window.moveTop();
     }
     this.reconcileDockSurface();
@@ -804,7 +804,7 @@ export class WindowManager {
     for (const id of dockedIds) {
       const window = this.windows.get(id);
       if (!window || window.isDestroyed()) continue;
-      if (id === this.activeDockedId) window.showInactive();
+      if (id === this.activeDockedId) this.showNoteWindow(window, { inactive: true });
       else window.hide();
     }
   }
@@ -848,10 +848,7 @@ export class WindowManager {
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
     if (process.platform === "darwin") {
-      shelf.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true,
-      });
+      shelf.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
     }
     this.loadRenderer(shelf, {
       view: "shelf",
@@ -1005,7 +1002,7 @@ export class WindowManager {
     this.beginNoteTransition(id, window);
     const start = sourceBounds ?? this.shelfNoteTransitionBounds(shelf);
     window.setBounds(start, false);
-    window.showInactive();
+    this.showNoteWindow(window, { inactive: true });
     window.moveTop();
     this.animateShelfNoteReveal(window, this.shelfNoteDragSession, start);
     log.info("已从侧边架开始拖动便签", { id });
@@ -1218,21 +1215,36 @@ export class WindowManager {
       if (owner === blurredWindow && this.store.isDraft(id)) blurredDraftIds.add(id);
     }
     for (const id of blurredDraftIds) void this.discardDraftAfterBlur(id);
+    if (process.platform !== "darwin") this.scheduleAppBlurHide(blurredWindow);
+  }
+
+  handleApplicationBlur() {
+    for (const [id, window] of this.windows) {
+      if (this.store.isDocked(id) && !window.isDestroyed()) this.workspaceRebindWindows.add(window.id);
+    }
+    this.scheduleAppBlurHide();
+  }
+
+  scheduleAppBlurHide(blurredWindow = null) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
     const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
       ? this.windows.get(this.activeDockedId)
       : null;
-    if (blurredWindow !== activeWindow && blurredWindow !== this.shelfWindow) return;
+    if (blurredWindow && blurredWindow !== activeWindow && blurredWindow !== this.shelfWindow) return;
     this.cancelAppBlurHide();
     this.appBlurTimer = setTimeout(() => {
       this.appBlurTimer = null;
+      if (this.isAppActive() || BrowserWindow.getFocusedWindow()) return;
       if (this.shelfNoteDragSession || this.moveSessions.size > 0) return;
-      const activeWindowVisible = activeWindow && !activeWindow.isDestroyed() && activeWindow.isVisible();
+      const currentActiveWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
+        ? this.windows.get(this.activeDockedId)
+        : null;
+      const activeWindowVisible = currentActiveWindow && !currentActiveWindow.isDestroyed() && currentActiveWindow.isVisible();
       if (!this.shelfExpanded && !activeWindowVisible) return;
       this.cancelHideGroup();
-      this.hideGroupNow(activeWindow);
+      this.hideGroupNow(currentActiveWindow);
       log.info("切换到其他应用后已收回侧边栏");
-    }, APP_BLUR_HIDE_DELAY_MS);
+    }, SHELF_HIDE_DELAY_MS);
   }
 
   async discardDraftAfterBlur(id) {
@@ -1308,8 +1320,7 @@ export class WindowManager {
     }
     this.activeDockedId = id;
     if (mode === "inline") {
-      window.show();
-      window.focus();
+      this.showNoteWindow(window, { focus: true });
       this.sendGroupState();
       return;
     }
@@ -1366,10 +1377,9 @@ export class WindowManager {
     }, display.workArea);
     window.setBounds(bounds, false);
     if (focus) {
-      window.show();
-      window.focus();
+      this.showNoteWindow(window, { focus: true });
     } else if (!window.isVisible()) {
-      window.showInactive();
+      this.showNoteWindow(window, { inactive: true });
     }
     return this.store.getRenderableNote(id);
   }
@@ -1397,7 +1407,7 @@ export class WindowManager {
       this.applyPinnedLevel(window, state.pinned);
       window.webContents.send("note:remote", this.store.getRenderableNote(note.id));
       if (this.store.isDocked(note.id) && note.id !== this.activeDockedId) window.hide();
-      else if (!this.store.isDocked(note.id) && !window.isVisible()) window.showInactive();
+      else if (!this.store.isDocked(note.id) && !window.isVisible()) this.showNoteWindow(window, { inactive: true });
     }
     this.reconcileDockSurface();
     this.broadcastNoteList();
@@ -1422,9 +1432,25 @@ export class WindowManager {
     window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
     window.setResizable(this.wayland && !state.collapsed);
     this.applyPinnedLevel(window, state.pinned);
-    window.show();
-    if (focus) window.focus();
+    this.showNoteWindow(window, { focus });
     this.animateBounds(window, target);
+  }
+
+  showNoteWindow(window, { focus = false, inactive = false } = {}) {
+    if (!window || window.isDestroyed()) return false;
+    if (process.platform === "darwin" && !window.isVisible()) {
+      const needsWorkspaceRebind = this.workspaceRebindWindows.delete(window.id);
+      if (needsWorkspaceRebind && window.isVisibleOnAllWorkspaces()) {
+        window.setVisibleOnAllWorkspaces(false, MACOS_WORKSPACE_OPTIONS);
+      }
+      if (needsWorkspaceRebind || !window.isVisibleOnAllWorkspaces()) {
+        window.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
+      }
+    }
+    if (inactive) window.showInactive();
+    else window.show();
+    if (focus) window.focus();
+    return true;
   }
 
   constrainAllWindows() {

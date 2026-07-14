@@ -171,6 +171,27 @@ test("编辑侧边便签后切换应用会自动收回", async () => {
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
     ), noteWindow.url())).toBe(false);
     await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(36);
+
+    await app.evaluate(({ BrowserWindow }, url) => {
+      const note = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      note?.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
+    }, noteWindow.url());
+    await shelfWindow.bringToFront();
+    await shelfWindow.getByLabel("展开侧边便签架").click();
+    await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(200);
+    await shelfWindow.locator(".note-list-item").click();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
+      const note = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
+      return {
+        visible: note?.isVisible(),
+        focused: note?.isFocused(),
+        visibleOnAllWorkspaces: note?.isVisibleOnAllWorkspaces(),
+      };
+    }, noteWindow.url())).toEqual({
+      visible: true,
+      focused: true,
+      visibleOnAllWorkspaces: true,
+    });
   } finally {
     await app.close();
   }

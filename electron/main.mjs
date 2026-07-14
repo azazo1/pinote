@@ -52,6 +52,7 @@ app.whenReady().then(async () => {
     requestQuit: (owner) => void confirmAndQuit(owner),
     showDock: showDockIcon,
     hideDock: hideDockIcon,
+    isAppActive: () => process.platform === "darwin" ? app.isActive() : Boolean(BrowserWindow.getFocusedWindow()),
   });
   sync = new SyncService(store, windows);
   registerIpc();
@@ -81,6 +82,10 @@ app.whenReady().then(async () => {
     windows.handleBrowserWindowBlur(window);
   });
   app.on("browser-window-focus", () => windows.cancelAppBlurHide());
+  if (process.platform === "darwin") {
+    app.on("did-resign-active", () => windows.handleApplicationBlur());
+    app.on("did-become-active", () => windows.cancelAppBlurHide());
+  }
 }).catch((error) => {
   log.error("Pinote 启动失败", error);
   app.quit();
