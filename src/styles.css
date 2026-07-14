@@ -835,6 +835,18 @@ button {
   font-size: 0.9em;
 }
 
+.note-editor .cm-md-code-block {
+  padding-right: 0.35em;
+  padding-left: 0.35em;
+  background: rgb(255 255 255 / 25%);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.note-editor .cm-md-code-fence {
+  color: color-mix(in srgb, var(--note-ink) 58%, transparent);
+}
+
 .note-editor .cm-md-link {
   color: #176c7a;
   text-decoration: underline;

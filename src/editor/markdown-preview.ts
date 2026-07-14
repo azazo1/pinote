@@ -1,3 +1,5 @@
+import { syntaxTree } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
 import { findInlineTags, MAX_TAG_LENGTH, normalizeTags } from "../lib/note-metadata";
 
 export type MarkdownReplacement =
@@ -13,6 +15,30 @@ export type MarkdownDecoration =
 export interface MarkdownLinePreview {
   className?: string;
   decorations: MarkdownDecoration[];
+}
+
+export type MarkdownCodeBlockLine = "fence" | "content";
+
+export function markdownCodeBlockLines(state: EditorState) {
+  const lines = new Map<number, MarkdownCodeBlockLine>();
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "FencedCode") return;
+
+      const firstLine = state.doc.lineAt(node.from).number;
+      const lastLine = state.doc.lineAt(Math.max(node.from, node.to - 1)).number;
+      for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber += 1) {
+        lines.set(lineNumber, "content");
+      }
+      for (const marker of node.node.getChildren("CodeMark")) {
+        lines.set(state.doc.lineAt(marker.from).number, "fence");
+      }
+      return false;
+    },
+  });
+
+  return lines;
 }
 
 export function markdownTagDecorations(markdown: string, highlightedTags?: readonly string[]): MarkdownDecoration[] {
@@ -47,22 +73,61 @@ interface InlinePattern {
   className: string;
   priority: number;
   contentGroup: number;
+  underscoreDelimiter?: boolean;
 }
 
 const inlinePatterns: InlinePattern[] = [
   { expression: /`([^`\n]+)`/g, className: "cm-md-inline-code", priority: 0, contentGroup: 1 },
   { expression: /\[([^\]\n]+)\]\(([^)\n]+)\)/g, className: "cm-md-link", priority: 1, contentGroup: 1 },
   { expression: /\*\*([^*\n]+)\*\*/g, className: "cm-md-strong", priority: 2, contentGroup: 1 },
-  { expression: /__([^_\n]+)__/g, className: "cm-md-strong", priority: 2, contentGroup: 1 },
+  {
+    expression: /__([^_\n]+)__/g,
+    className: "cm-md-strong",
+    priority: 2,
+    contentGroup: 1,
+    underscoreDelimiter: true,
+  },
   { expression: /~~([^~\n]+)~~/g, className: "cm-md-strike", priority: 2, contentGroup: 1 },
   { expression: /\*([^*\n]+)\*/g, className: "cm-md-emphasis", priority: 3, contentGroup: 1 },
-  { expression: /_([^_\n]+)_/g, className: "cm-md-emphasis", priority: 3, contentGroup: 1 },
+  {
+    expression: /_([^_\n]+)_/g,
+    className: "cm-md-emphasis",
+    priority: 3,
+    contentGroup: 1,
+    underscoreDelimiter: true,
+  },
 ];
 
 function isEscaped(text: string, position: number) {
   let slashCount = 0;
   for (let index = position - 1; index >= 0 && text[index] === "\\"; index -= 1) slashCount += 1;
   return slashCount % 2 === 1;
+}
+
+function delimiterFlanking(text: string, from: number, to: number) {
+  const before = from > 0 ? text[from - 1] : undefined;
+  const after = to < text.length ? text[to] : undefined;
+  const beforeWhitespace = before === undefined || /\s/u.test(before);
+  const afterWhitespace = after === undefined || /\s/u.test(after);
+  const beforePunctuation = before !== undefined && /[\p{P}\p{S}]/u.test(before);
+  const afterPunctuation = after !== undefined && /[\p{P}\p{S}]/u.test(after);
+
+  return {
+    left: !afterWhitespace && (!afterPunctuation || beforeWhitespace || beforePunctuation),
+    right: !beforeWhitespace && (!beforePunctuation || afterWhitespace || afterPunctuation),
+    beforePunctuation,
+    afterPunctuation,
+  };
+}
+
+function isValidUnderscoreDelimiter(text: string, from: number, contentFrom: number, contentTo: number, to: number) {
+  if (text[from - 1] === "_" || text[to] === "_") return false;
+
+  const opening = delimiterFlanking(text, from, contentFrom);
+  const closing = delimiterFlanking(text, contentTo, to);
+  const canOpen = opening.left && (!opening.right || opening.beforePunctuation);
+  const canClose = closing.right && (!closing.left || closing.afterPunctuation);
+  return canOpen && canClose;
 }
 
 function collectInlineCandidates(text: string, bodyFrom: number) {
@@ -78,9 +143,14 @@ function collectInlineCandidates(text: string, bodyFrom: number) {
       const contentOffset = match[0].indexOf(content);
       const contentFrom = matchFrom + contentOffset;
       const contentTo = contentFrom + content.length;
+      const matchTo = matchFrom + match[0].length;
+      if (
+        pattern.underscoreDelimiter
+        && !isValidUnderscoreDelimiter(text, matchFrom, contentFrom, contentTo, matchTo)
+      ) continue;
       candidates.push({
         from: matchFrom,
-        to: matchFrom + match[0].length,
+        to: matchTo,
         priority: pattern.priority,
         contentFrom,
         contentTo,
@@ -124,7 +194,19 @@ function inlineDecorations(text: string, bodyFrom: number, offset: number, activ
   return decorations;
 }
 
-export function markdownLinePreview(text: string, offset: number, active: boolean): MarkdownLinePreview {
+export function markdownLinePreview(
+  text: string,
+  offset: number,
+  active: boolean,
+  codeBlockLine?: MarkdownCodeBlockLine,
+): MarkdownLinePreview {
+  if (codeBlockLine) {
+    return {
+      className: `cm-md-code-block cm-md-code-${codeBlockLine}`,
+      decorations: [],
+    };
+  }
+
   const decorations: MarkdownDecoration[] = [];
   let className: string | undefined;
   let bodyFrom = 0;

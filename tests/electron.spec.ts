@@ -130,6 +130,34 @@ test("Tab and Shift+Tab indent Markdown list items", async () => {
   }
 });
 
+test("代码块和普通标识符保留下划线", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-code-block-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+
+    const noteWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const noteWindow = await noteWindowCreated;
+    await noteWindow.locator(".title-input").press("Enter");
+
+    const editor = noteWindow.locator(".note-editor .cm-content");
+    await editor.fill("hello_world hello_world\n```ts\nhello_world hello_world\n```\n");
+
+    await expect(noteWindow.locator(".cm-line").first()).toHaveText("hello_world hello_world");
+    await expect(noteWindow.locator(".cm-md-emphasis")).toHaveCount(0);
+    await expect(noteWindow.locator(".cm-md-code-block")).toHaveCount(3);
+    await expect(noteWindow.locator(".cm-md-code-content")).toHaveText("hello_world hello_world");
+  } finally {
+    await app.close();
+  }
+});
+
 test("空选区复制或剪切当前行", async () => {
   const app = await electron.launch({
     args: ["."],

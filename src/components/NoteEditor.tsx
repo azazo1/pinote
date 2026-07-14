@@ -15,7 +15,12 @@ import {
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { emacsMotionTarget, type EmacsMotionKey } from "../editor/emacs-motion";
 import { markdownListIndentKeyBinding } from "../editor/markdown-list-indent";
-import { markdownLinePreview, markdownTagDecorations, type MarkdownReplacement } from "../editor/markdown-preview";
+import {
+  markdownCodeBlockLines,
+  markdownLinePreview,
+  markdownTagDecorations,
+  type MarkdownReplacement,
+} from "../editor/markdown-preview";
 
 interface NoteEditorProps {
   autoFocus?: boolean;
@@ -89,10 +94,16 @@ function buildPreviewDecorations(view: EditorView, highlightedTags: readonly str
   const ranges: Array<Range<Decoration>> = [];
   const atomicRanges: Array<Range<Decoration>> = [];
   const activeLine = view.state.doc.lineAt(view.state.selection.main.head).number;
+  const codeBlockLines = markdownCodeBlockLines(view.state);
 
   for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
     const line = view.state.doc.line(lineNumber);
-    const preview = markdownLinePreview(line.text, line.from, lineNumber === activeLine);
+    const preview = markdownLinePreview(
+      line.text,
+      line.from,
+      lineNumber === activeLine,
+      codeBlockLines.get(lineNumber),
+    );
     if (preview.className) {
       ranges.push(Decoration.line({ attributes: { class: preview.className } }).range(line.from));
     }

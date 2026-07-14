@@ -1,5 +1,7 @@
+import { markdown } from "@codemirror/lang-markdown";
+import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { markdownLinePreview, markdownTagDecorations } from "./markdown-preview";
+import { markdownCodeBlockLines, markdownLinePreview, markdownTagDecorations } from "./markdown-preview";
 
 describe("markdownLinePreview", () => {
   it("hides block markers outside the active line", () => {
@@ -61,6 +63,28 @@ describe("markdownLinePreview", () => {
     const preview = markdownLinePreview("\\*literal*", 0, false);
 
     expect(preview.decorations).toEqual([]);
+  });
+
+  it("does not interpret underscores inside words as emphasis", () => {
+    expect(markdownLinePreview("hello_world hello_world", 0, false).decorations).toEqual([]);
+    expect(markdownLinePreview("before__middle__after", 0, false).decorations).toEqual([]);
+  });
+
+  it("keeps fenced code content literal", () => {
+    const document = ["before", "```ts", "hello_world hello_world", "*literal*", "```", "after"].join("\n");
+    const state = EditorState.create({ doc: document, extensions: [markdown()] });
+    const codeBlockLines = markdownCodeBlockLines(state);
+
+    expect([...codeBlockLines]).toEqual([
+      [2, "fence"],
+      [3, "content"],
+      [4, "content"],
+      [5, "fence"],
+    ]);
+    expect(markdownLinePreview("hello_world hello_world", 13, false, codeBlockLines.get(3))).toEqual({
+      className: "cm-md-code-block cm-md-code-content",
+      decorations: [],
+    });
   });
 
   it("highlights document tags outside protected Markdown ranges", () => {
