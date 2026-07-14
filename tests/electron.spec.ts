@@ -453,6 +453,13 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await window.locator(".title-input").fill("QA 便签");
     const editor = window.locator(".note-editor .cm-content");
+    await editor.fill("- [ ] ");
+    await editor.press("Home");
+    await editor.press("Control+f");
+    await editor.pressSequentially("abcd");
+    await expect.poll(() => window.evaluate(async (id) => {
+      return (await window.noteAPI.getNote(id)).note?.markdown;
+    }, firstNoteId)).toBe("- [ ] abcd");
     await editor.fill("- [ ]");
     await editor.press("End");
     await editor.press("Space");

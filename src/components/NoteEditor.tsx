@@ -1,7 +1,7 @@
 import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorState, StateEffect, type Range } from "@codemirror/state";
+import { EditorSelection, EditorState, StateEffect, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -87,6 +87,7 @@ function replacementWidget(replacement: MarkdownReplacement) {
 
 function buildPreviewDecorations(view: EditorView, highlightedTags: readonly string[]) {
   const ranges: Array<Range<Decoration>> = [];
+  const atomicRanges: Array<Range<Decoration>> = [];
   const activeLine = view.state.doc.lineAt(view.state.selection.main.head).number;
 
   for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
@@ -97,11 +98,14 @@ function buildPreviewDecorations(view: EditorView, highlightedTags: readonly str
     }
     for (const decoration of preview.decorations) {
       if (decoration.kind === "hide") {
-        ranges.push(Decoration.replace({}).range(decoration.from, decoration.to));
+        const range = Decoration.replace({}).range(decoration.from, decoration.to);
+        ranges.push(range);
+        atomicRanges.push(range);
       } else if (decoration.kind === "replace") {
-        ranges.push(
-          Decoration.replace({ widget: replacementWidget(decoration.replacement) }).range(decoration.from, decoration.to),
-        );
+        const range = Decoration.replace({ widget: replacementWidget(decoration.replacement) })
+          .range(decoration.from, decoration.to);
+        ranges.push(range);
+        atomicRanges.push(range);
       } else if (decoration.from < decoration.to) {
         ranges.push(Decoration.mark({ class: decoration.className }).range(decoration.from, decoration.to));
       }
@@ -114,16 +118,22 @@ function buildPreviewDecorations(view: EditorView, highlightedTags: readonly str
     }
   }
 
-  return Decoration.set(ranges, true);
+  return {
+    atomicRanges: Decoration.set(atomicRanges, true),
+    decorations: Decoration.set(ranges, true),
+  };
 }
 
-function markdownPreviewPlugin(highlightedTags: { current: readonly string[] }) {
-  return ViewPlugin.fromClass(
+function markdownPreviewExtension(highlightedTags: { current: readonly string[] }) {
+  const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      atomicRanges: DecorationSet;
 
       constructor(view: EditorView) {
-        this.decorations = buildPreviewDecorations(view, highlightedTags.current);
+        const preview = buildPreviewDecorations(view, highlightedTags.current);
+        this.decorations = preview.decorations;
+        this.atomicRanges = preview.atomicRanges;
       }
 
       update(update: ViewUpdate) {
@@ -131,12 +141,18 @@ function markdownPreviewPlugin(highlightedTags: { current: readonly string[] }) 
           transaction.effects.some((effect) => effect.is(refreshMarkdownPreview))
         ));
         if (update.docChanged || update.selectionSet || update.viewportChanged || refreshRequested) {
-          this.decorations = buildPreviewDecorations(update.view, highlightedTags.current);
+          const preview = buildPreviewDecorations(update.view, highlightedTags.current);
+          this.decorations = preview.decorations;
+          this.atomicRanges = preview.atomicRanges;
         }
       }
     },
     { decorations: (plugin) => plugin.decorations },
   );
+  return [
+    plugin,
+    EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none),
+  ];
 }
 
 function moveSelection(view: EditorView, target: number) {
@@ -146,6 +162,10 @@ function moveSelection(view: EditorView, target: number) {
 
 function runEmacsMotion(view: EditorView, key: EmacsMotionKey) {
   const selection = view.state.selection.main;
+  if (key === "b" || key === "f") {
+    const start = EditorSelection.cursor(key === "b" ? selection.from : selection.to);
+    return moveSelection(view, view.moveByChar(start, key === "f").head);
+  }
   const target = emacsMotionTarget(view.state.doc.toString(), selection.from, selection.to, key);
   return moveSelection(view, target);
 }
@@ -214,7 +234,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
           }),
           keymap.of([markdownListIndentKeyBinding, ...emacsKeymap, ...standardKeymap, ...historyKeymap]),
           placeholder("写点什么"),
-          markdownPreviewPlugin(highlightedTagsRef),
+          markdownPreviewExtension(highlightedTagsRef),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !applyingExternalValue.current) {
               onChangeRef.current(update.state.doc.toString());
