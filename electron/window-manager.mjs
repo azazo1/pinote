@@ -356,11 +356,13 @@ export class WindowManager {
 
   createDockedNote() {
     const note = this.store.createDraft();
-    this.open(note, { initialFocus: "title" });
+    const window = this.open(note, { initialFocus: "title" });
+    window.once("ready-to-show", () => this.activateDockedNote(note.id));
     this.dockNote(note.id, { persist: false });
     if (this.getDockMode() === "shelf" && this.shelfWindow) {
       this.draftFocusOwners.set(note.id, this.shelfWindow);
     }
+    this.cancelHideGroup();
     return this.store.getRenderableNote(note.id);
   }
 

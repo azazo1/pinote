@@ -30,14 +30,24 @@ test("侧边架全屏拖放和收纳动画", async () => {
     const createdId = await shelf.evaluate(async (ids) => (
       (await window.noteAPI.listNotes(true)).find((note) => !ids.includes(note.id))?.id ?? null
     ), existingIds);
-    expect(createdId).not.toBeNull();
+    if (!createdId) throw new Error("侧边栏新建便签 id 不存在");
     await expect.poll(() => shelf.evaluate(async (id) => {
-      const note = id ? (await window.noteAPI.getNote(id)).note : null;
+      const note = (await window.noteAPI.getNote(id)).note;
       return note ? { dockState: note.dockState, open: note.open } : null;
     }, createdId)).toEqual({ dockState: "shelf", open: true });
     await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))?.isVisible()
-    ), createdId)).toBe(false);
+    ), createdId)).toBe(true);
+    const createdBounds = await app.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))?.getBounds() ?? null
+    ), createdId);
+    if (!createdBounds) throw new Error("侧边栏新建便签窗口不存在");
+    const expandedShelfBounds = await shelfBounds(app);
+    const horizontalGap = Math.min(
+      Math.abs(createdBounds.x + createdBounds.width - expandedShelfBounds.x),
+      Math.abs(expandedShelfBounds.x + expandedShelfBounds.width - createdBounds.x),
+    );
+    expect(horizontalGap).toBe(10);
     await shelf.locator(`[data-note-id="${createdId}"] .note-list-close`).click();
     await expect(shelf.locator(".note-list-item")).toHaveCount(2);
 
