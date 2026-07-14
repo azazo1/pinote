@@ -300,6 +300,36 @@ describe("NoteStore", () => {
     await store.save();
   });
 
+  it("rebases a delayed renderer edit onto this device's acknowledged revision", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    const createRequest = store.buildSyncRequest();
+    store.applySyncResponse({
+      notes: [{ ...createRequest.changes[0], revision: 1 }],
+      deleted: [],
+      conflicts: [],
+    }, createRequest);
+
+    store.updateContent(note.id, { markdown: "输入中的拼音" }, 1);
+    const composingRequest = store.buildSyncRequest();
+    store.applySyncResponse({
+      notes: [{ ...composingRequest.changes[0], revision: 2 }],
+      deleted: [],
+      conflicts: [],
+    }, composingRequest);
+
+    store.updateContent(note.id, { markdown: "中文输入完成" }, 1);
+
+    expect(store.getNote(note.id)).toMatchObject({
+      markdown: "中文输入完成",
+      revision: 2,
+      dirty: true,
+    });
+    expect(store.buildSyncRequest().changes[0].baseRevision).toBe(2);
+    await store.save();
+  });
+
   it("keeps and rebases a deletion made while content is syncing", async () => {
     const store = testStore();
     await store.load();

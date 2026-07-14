@@ -148,7 +148,10 @@ export class NoteStore {
     note.color = next.color;
     note.groupName = next.groupName;
     note.tags = next.tags;
-    note.revision = Math.min(note.revision, expectedRevision);
+    const hasAcknowledgedLocalRevision = note.modifiedBy === this.state.deviceId && note.revision > expectedRevision;
+    if (!hasAcknowledgedLocalRevision) {
+      note.revision = Math.min(note.revision, expectedRevision);
+    }
     note.modifiedAt = Date.now();
     note.modifiedBy = this.state.deviceId;
     note.dirty = true;
