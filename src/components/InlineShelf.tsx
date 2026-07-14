@@ -12,7 +12,7 @@ export function InlineShelf({ activeId }: InlineShelfProps) {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
 
   useEffect(() => {
-    void window.noteAPI.listNotes().then(setNotes);
+    void window.noteAPI.listNotes(true).then(setNotes);
     return window.noteAPI.onNoteList(setNotes);
   }, []);
 

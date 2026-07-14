@@ -136,20 +136,17 @@ function registerIpc() {
     capabilities: windows.getCapabilities(),
   }));
   ipcMain.handle("note:update", (_event, id, patch, baseRevision) => {
-    const note = store.updateContent(validId(id), sanitizePatch(patch), validBaseRevision(baseRevision));
+    id = validId(id);
+    const note = store.updateContent(id, sanitizePatch(patch), validBaseRevision(baseRevision));
     windows.broadcastNoteList();
-    sync.schedule();
+    if (note && !store.isDraft(id)) sync.schedule();
     return note;
   });
   ipcMain.handle("note:create", () => {
-    const note = windows.createNearFocused();
-    sync.schedule();
-    return note;
+    return windows.createNearFocused();
   });
   ipcMain.handle("note:create-docked", () => {
-    const note = windows.createDockedNote();
-    sync.schedule();
-    return note;
+    return windows.createDockedNote();
   });
   ipcMain.handle("note:open", (_event, id) => windows.openNote(validId(id)));
   ipcMain.on("note:flush-complete", (event, requestId, succeeded) => {
@@ -199,7 +196,7 @@ function registerIpc() {
   ipcMain.on("group:reveal", () => windows.revealGroup());
   ipcMain.on("group:hide", () => windows.scheduleHideGroup());
   ipcMain.on("group:cancel-hide", () => windows.cancelHideGroup());
-  ipcMain.handle("notes:list", () => store.listSummaries());
+  ipcMain.handle("notes:list", (_event, includeDrafts) => store.listSummaries(includeDrafts === true));
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
   ipcMain.handle("group:close-docked-note", (_event, id) => windows.closeDockedNote(validId(id)));
   ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
@@ -306,7 +303,6 @@ function executeShortcut(id, focusedWindow) {
   }
   if (id === "new-note") {
     windows.createNearFocused();
-    sync.schedule();
     return;
   }
   if (id === "focus-search") {
@@ -470,7 +466,6 @@ function installTray() {
     const createNote = () => {
       if (quitStarted) return;
       const note = windows.createNearFocused();
-      sync.schedule();
       log.info("从系统托盘新建便签", { id: note.id });
     };
     const quit = () => {

@@ -119,7 +119,7 @@ export default function ShelfApp() {
       });
     }
 
-    void window.noteAPI.listNotes().then(updateNotes);
+    void window.noteAPI.listNotes(true).then(updateNotes);
     const offList = window.noteAPI.onNoteList(updateNotes);
     const offExpanded = window.noteAPI.onShelfExpanded(setExpanded);
     const offPlacement = window.noteAPI.onShelfPlacement(setPlacement);

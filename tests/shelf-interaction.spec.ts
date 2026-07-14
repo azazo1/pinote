@@ -24,11 +24,11 @@ test("侧边架全屏拖放和收纳动画", async () => {
     await shelf.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
     await expect.poll(() => shelf.evaluate(() => window.innerWidth), { timeout: 2_500 }).toBe(200);
 
-    const existingIds = await shelf.evaluate(async () => (await window.noteAPI.listNotes()).map((note) => note.id));
+    const existingIds = await shelf.evaluate(async () => (await window.noteAPI.listNotes(true)).map((note) => note.id));
     await shelf.getByRole("button", { name: "新建便签" }).click();
     await expect(shelf.locator(".note-list-item")).toHaveCount(3);
     const createdId = await shelf.evaluate(async (ids) => (
-      (await window.noteAPI.listNotes()).find((note) => !ids.includes(note.id))?.id ?? null
+      (await window.noteAPI.listNotes(true)).find((note) => !ids.includes(note.id))?.id ?? null
     ), existingIds);
     expect(createdId).not.toBeNull();
     await expect.poll(() => shelf.evaluate(async (id) => {
@@ -114,7 +114,9 @@ async function createNote(app: ElectronApplication, main: Page) {
   const existing = new Set(app.windows().map((page) => page.url()));
   await main.locator(".main-create-button").click();
   await expect.poll(() => app.windows().find((page) => page.url().includes("noteId=") && !existing.has(page.url()))).toBeTruthy();
-  return app.windows().find((page) => page.url().includes("noteId=") && !existing.has(page.url()))!;
+  const note = app.windows().find((page) => page.url().includes("noteId=") && !existing.has(page.url()))!;
+  await note.locator(".title-input").fill("侧边架测试便签");
+  return note;
 }
 
 async function waitForWindow(app: ElectronApplication, query: string) {

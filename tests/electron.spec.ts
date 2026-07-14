@@ -22,8 +22,71 @@ test("新建便签聚焦标题并用回车进入内容", async () => {
     const titleInput = noteWindow.locator(".title-input");
     const editorContent = noteWindow.locator(".note-editor .cm-content");
     await expect(titleInput).toBeFocused();
+    await expect(titleInput).toHaveValue("");
     await titleInput.press("Enter");
     await expect(editorContent).toBeFocused();
+  } finally {
+    await app.close();
+  }
+});
+
+test("未编辑的新便签失焦后丢弃且正式便签清空后保留", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-draft-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+
+    const draftWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const draftWindow = await draftWindowCreated;
+    const draftId = new URL(draftWindow.url()).searchParams.get("noteId");
+    if (!draftId) throw new Error("临时便签 id 不存在");
+    await expect(draftWindow.locator(".title-input")).toHaveValue("");
+
+    await draftWindow.bringToFront();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getFocusedWindow()?.webContents.getURL()
+    ))).toBe(draftWindow.url());
+
+    const savedWindowCreated = app.waitForEvent("window");
+    await draftWindow.evaluate(() => window.noteAPI.createNote());
+    const savedWindow = await savedWindowCreated;
+    const savedId = new URL(savedWindow.url()).searchParams.get("noteId");
+    if (!savedId) throw new Error("正式便签 id 不存在");
+    await savedWindow.bringToFront();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getFocusedWindow()?.webContents.getURL()
+    ))).toBe(savedWindow.url());
+    await expect.poll(() => mainWindow.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note, draftId)).toBeNull();
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
+
+    await savedWindow.locator(".title-input").fill("保留内容");
+    const commitGuardCreated = app.waitForEvent("window");
+    await savedWindow.evaluate(() => window.noteAPI.createNote());
+    const commitGuard = await commitGuardCreated;
+    await commitGuard.bringToFront();
+    await expect.poll(() => mainWindow.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note?.title, savedId)).toBe("保留内容");
+
+    await savedWindow.bringToFront();
+    await savedWindow.locator(".title-input").fill("");
+    const clearGuardCreated = app.waitForEvent("window");
+    await savedWindow.evaluate(() => window.noteAPI.createNote());
+    const clearGuard = await clearGuardCreated;
+    await clearGuard.bringToFront();
+    await expect.poll(() => mainWindow.evaluate(async (id) => {
+      const note = (await window.noteAPI.getNote(id)).note;
+      return note ? { title: note.title, markdown: note.markdown } : null;
+    }, savedId)).toEqual({ title: "", markdown: "" });
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
   } finally {
     await app.close();
   }
@@ -86,6 +149,11 @@ test("编辑侧边便签后切换应用会自动收回", async () => {
     const noteId = new URL(noteWindow.url()).searchParams.get("noteId");
     if (!noteId) throw new Error("便签 id 不存在");
 
+    const changedMarkdown = "应用失活前修改的内容";
+    await noteWindow.locator(".note-editor .cm-content").fill(changedMarkdown);
+    await expect.poll(() => noteWindow.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note?.markdown, noteId)).toBe(changedMarkdown);
     await noteWindow.evaluate((id) => window.noteAPI.toggleNoteDock(id), noteId);
     await expect.poll(() => app.windows().find((page) => page.url().includes("view=shelf"))).toBeTruthy();
     const shelfWindow = app.windows().find((page) => page.url().includes("view=shelf"));
@@ -97,11 +165,6 @@ test("编辑侧边便签后切换应用会自动收回", async () => {
       BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
     ), noteWindow.url())).toBe(true);
 
-    const changedMarkdown = "应用失活前修改的内容";
-    await noteWindow.locator(".note-editor .cm-content").fill(changedMarkdown);
-    await expect.poll(() => noteWindow.evaluate(async (id) => (
-      await window.noteAPI.getNote(id)
-    ).note?.markdown, noteId)).toBe(changedMarkdown);
     execFileSync("osascript", ["-e", "tell application \"Finder\" to activate"]);
 
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => (
@@ -287,7 +350,7 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await mainWindow.locator(".main-create-button").click();
     await expect.poll(() => app.windows().filter((page) => page.url().includes("noteId=")).length).toBe(1);
-    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
     const window = app.windows().find((page) => page.url().includes("noteId="));
     expect(window).toBeTruthy();
     if (!window) throw new Error("便签窗口未创建");
@@ -492,7 +555,7 @@ test("主窗口和便签窗口关键流程", async () => {
 
     await triggerShortcut(window, "new-note");
     await expect.poll(() => app.windows().filter((page) => page.url().includes("noteId=")).length).toBe(2);
-    await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
     let secondWindow = app.windows().find((page) => page.url().includes("noteId=") && page.url() !== firstNoteUrl);
     expect(secondWindow).toBeTruthy();
     if (!secondWindow) throw new Error("第二张便签窗口未创建");
@@ -501,6 +564,11 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
     }, secondWindow.url())).toBe(true);
+    await secondWindow.locator(".title-input").fill("第二张便签");
+    await expect.poll(() => secondWindow.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note?.title, secondNoteId)).toBe("第二张便签");
+    await expect(mainWindow.locator(".main-note-row")).toHaveCount(2);
 
     const search = mainWindow.getByLabel("搜索便签");
     await search.fill("#Rust");
@@ -603,6 +671,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(true);
     const shelf = app.windows().find((page) => page.url().includes("view=shelf"));
     expect(shelf).toBeTruthy();
+    await expect(shelf!.locator(".shelf-handle")).toBeAttached();
     const shelfWorkspaceState = await app.evaluate(({ BrowserWindow }) => {
       const shelfWindow = BrowserWindow.getAllWindows()
         .find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
@@ -1198,6 +1267,7 @@ test("归档便签显示 checkbox 并可恢复", async () => {
 
     await noteWindow.bringToFront();
     await expect(noteWindow.locator(".title-input")).toBeFocused();
+    await noteWindow.locator(".title-input").fill("归档测试");
     await app.evaluate(({ BrowserWindow, Menu }, url) => {
       const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
       const item = Menu.getApplicationMenu()?.getMenuItemById("toggle-archive");

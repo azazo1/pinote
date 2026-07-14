@@ -150,7 +150,7 @@ export interface NoteAPI {
   revealGroup: () => void;
   hideGroup: () => void;
   cancelGroupHide: () => void;
-  listNotes: () => Promise<NoteSummary[]>;
+  listNotes: (includeDrafts?: boolean) => Promise<NoteSummary[]>;
   activateDockedNote: (id: string) => Promise<void>;
   closeDockedNote: (id: string) => Promise<boolean>;
   setShelfExpanded: (expanded: boolean) => void;

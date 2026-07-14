@@ -47,6 +47,8 @@ export class WindowManager {
     this.moveSessions = new Map();
     this.shelfNoteDragSession = null;
     this.transitioningNotes = new Set();
+    this.discardingDrafts = new Set();
+    this.draftFocusOwners = new Map();
     this.shelfHoverTimer = null;
     this.shelfHoverStartedAt = null;
     this.shelfDropExpandTimer = null;
@@ -67,8 +69,17 @@ export class WindowManager {
   }
 
   flushPendingNotes() {
+    return this.flushWindows([...this.windows.values()]);
+  }
+
+  flushPendingNote(id) {
+    const window = this.windows.get(id);
+    return this.flushWindows(window ? [window] : []);
+  }
+
+  flushWindows(windows) {
     const targets = new Map(
-      [...this.windows.values()]
+      windows
         .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
         .map((window) => [window.webContents.id, window.webContents]),
     );
@@ -278,6 +289,10 @@ export class WindowManager {
   }
 
   closeNote(id) {
+    if (this.store.isDraft(id)) {
+      this.remove(id);
+      return true;
+    }
     if (!this.store.updateWindow(id, { open: false })) return false;
     const window = this.windows.get(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
@@ -330,7 +345,7 @@ export class WindowManager {
   createNearFocused() {
     const focused = BrowserWindow.getFocusedWindow();
     const bounds = focused && focused !== this.shelfWindow && focused !== this.mainWindow ? focused.getBounds() : null;
-    const note = this.store.createNote({
+    const note = this.store.createDraft({
       x: bounds ? bounds.x + 28 : undefined,
       y: bounds ? bounds.y + 28 : undefined,
     });
@@ -340,9 +355,12 @@ export class WindowManager {
   }
 
   createDockedNote() {
-    const note = this.store.createNote();
+    const note = this.store.createDraft();
     this.open(note, { initialFocus: "title" });
     this.dockNote(note.id, { persist: false });
+    if (this.getDockMode() === "shelf" && this.shelfWindow) {
+      this.draftFocusOwners.set(note.id, this.shelfWindow);
+    }
     return this.store.getRenderableNote(note.id);
   }
 
@@ -684,6 +702,7 @@ export class WindowManager {
   remove(id) {
     const window = this.windows.get(id);
     if (!this.store.deleteNote(id)) return;
+    this.draftFocusOwners.delete(id);
     this.cancelPendingBounds(id);
     this.resizeSessions.delete(id);
     this.moveSessions.delete(id);
@@ -1188,6 +1207,15 @@ export class WindowManager {
   }
 
   handleBrowserWindowBlur(blurredWindow) {
+    const blurredDraftIds = new Set(
+      [...this.windows.entries()]
+        .filter(([id, window]) => window === blurredWindow && this.store.isDraft(id))
+        .map(([id]) => id),
+    );
+    for (const [id, owner] of this.draftFocusOwners) {
+      if (owner === blurredWindow && this.store.isDraft(id)) blurredDraftIds.add(id);
+    }
+    for (const id of blurredDraftIds) void this.discardDraftAfterBlur(id);
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
     const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
       ? this.windows.get(this.activeDockedId)
@@ -1203,6 +1231,18 @@ export class WindowManager {
       this.hideGroupNow(activeWindow);
       log.info("切换到其他应用后已收回侧边栏");
     }, APP_BLUR_HIDE_DELAY_MS);
+  }
+
+  async discardDraftAfterBlur(id) {
+    if (this.discardingDrafts.has(id)) return;
+    this.discardingDrafts.add(id);
+    try {
+      const flushed = await this.flushPendingNote(id);
+      if (!flushed || !this.store.isDraft(id)) return;
+      this.remove(id);
+    } finally {
+      this.discardingDrafts.delete(id);
+    }
   }
 
   cancelAppBlurHide() {
@@ -1248,6 +1288,7 @@ export class WindowManager {
   activateDockedNote(id) {
     const mode = this.getDockMode();
     if (this.store.getDockState(id) !== mode) return;
+    this.draftFocusOwners.delete(id);
     this.cancelHideGroup();
     let window = this.windows.get(id);
     if (!window || window.isDestroyed()) {
@@ -1280,6 +1321,10 @@ export class WindowManager {
 
   closeDockedNote(id) {
     if (this.store.getDockState(id) !== "shelf") return false;
+    if (this.store.isDraft(id)) {
+      this.remove(id);
+      return true;
+    }
     const window = this.windows.get(id);
     this.cancelPendingBounds(id);
     this.moveSessions.delete(id);
@@ -1522,7 +1567,14 @@ export class WindowManager {
   }
 
   broadcastNoteList() {
-    this.broadcast("notes:list", this.store.listSummaries());
+    const notes = this.store.listSummaries();
+    const notesWithDrafts = this.store.listSummaries(true);
+    for (const window of [...this.windows.values(), this.shelfWindow]) {
+      if (window && !window.isDestroyed()) window.webContents.send("notes:list", notesWithDrafts);
+    }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send("notes:list", notes);
+    }
     if (this.shelfExpanded && this.store.listDockedNotes("shelf").length > 0) this.setShelfExpanded(true);
   }
 

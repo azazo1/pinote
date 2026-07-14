@@ -19,6 +19,7 @@ export class NoteStore {
     this.tempPath = path.join(userDataPath, "notes.json.tmp");
     this.platform = platform;
     this.state = createEmptyState(platform);
+    this.draftIds = new Set();
     this.writeQueue = Promise.resolve();
   }
 
@@ -32,6 +33,7 @@ export class NoteStore {
       this.state = createEmptyState(this.platform);
     }
 
+    this.draftIds.clear();
     await this.save();
     return this.state;
   }
@@ -57,8 +59,9 @@ export class NoteStore {
     };
   }
 
-  listSummaries() {
+  listSummaries(includeDrafts = false) {
     return this.state.notes
+      .filter((note) => includeDrafts || !this.isDraft(note.id))
       .map((note) => ({
         id: note.id,
         title: note.title,
@@ -98,10 +101,18 @@ export class NoteStore {
   }
 
   createNote(position = {}) {
+    return this.createNoteRecord(position, false);
+  }
+
+  createDraft(position = {}) {
+    return this.createNoteRecord(position, true);
+  }
+
+  createNoteRecord(position, draft) {
     const now = Date.now();
     const note = normalizeContentNote({
       id: randomUUID(),
-      title: "新便签",
+      title: draft ? "" : "新便签",
       markdown: "",
       color: this.state.preferences.defaultNoteColor,
       groupName: "",
@@ -120,9 +131,27 @@ export class NoteStore {
         ? { x: position.x, y: position.y, width: 253, height: 220 }
         : undefined,
     });
-    void this.save();
-    log.info("已创建便签", { id: note.id });
+    if (draft) {
+      this.draftIds.add(note.id);
+      log.info("已创建临时便签", { id: note.id });
+    } else {
+      void this.save();
+      log.info("已创建便签", { id: note.id });
+    }
     return this.getRenderableNote(note.id);
+  }
+
+  isDraft(id) {
+    return this.draftIds.has(id);
+  }
+
+  discardDraft(id) {
+    if (!this.draftIds.delete(id)) return false;
+    this.state.notes = this.state.notes.filter((item) => item.id !== id);
+    delete this.state.windows[id];
+    void this.save();
+    log.info("已丢弃未编辑便签", { id });
+    return true;
   }
 
   updateContent(id, patch, baseRevision) {
@@ -136,9 +165,11 @@ export class NoteStore {
       groupName: typeof patch.groupName === "string" ? normalizeGroupName(patch.groupName) : note.groupName,
       tags: Array.isArray(patch.tags) ? normalizeTags(patch.tags) : note.tags,
     };
+    const titleChanged = next.title !== note.title;
+    const markdownChanged = next.markdown !== note.markdown;
     if (
-      next.title === note.title &&
-      next.markdown === note.markdown &&
+      !titleChanged &&
+      !markdownChanged &&
       next.color === note.color &&
       next.groupName === note.groupName &&
       equalStringArrays(next.tags, note.tags)
@@ -155,6 +186,10 @@ export class NoteStore {
     note.modifiedAt = Date.now();
     note.modifiedBy = this.state.deviceId;
     note.dirty = true;
+    if (this.isDraft(id) && (titleChanged || markdownChanged)) {
+      this.draftIds.delete(id);
+      log.info("临时便签已转为正式便签", { id });
+    }
     void this.save();
     return this.getRenderableNote(id);
   }
@@ -188,6 +223,7 @@ export class NoteStore {
   }
 
   deleteNote(id) {
+    if (this.discardDraft(id)) return true;
     const note = this.getNote(id);
     if (!note) return false;
     this.state.notes = this.state.notes.filter((item) => item.id !== id);
@@ -243,7 +279,7 @@ export class NoteStore {
   buildSyncRequest() {
     return {
       deviceId: this.state.deviceId,
-      changes: this.state.notes.filter((note) => note.dirty).map((note) => ({
+      changes: this.state.notes.filter((note) => note.dirty && !this.isDraft(note.id)).map((note) => ({
         id: note.id,
         title: note.title,
         markdown: note.markdown,
@@ -261,7 +297,8 @@ export class NoteStore {
 
   applySyncResponse(snapshot, request = {}) {
     if (!Array.isArray(snapshot?.notes) || !Array.isArray(snapshot?.deleted)) throw new Error("同步响应格式无效");
-    const localNotes = new Map(this.state.notes.map((note) => [note.id, note]));
+    const drafts = this.state.notes.filter((note) => this.isDraft(note.id));
+    const localNotes = new Map(this.state.notes.filter((note) => !this.isDraft(note.id)).map((note) => [note.id, note]));
     const localDeleted = new Map(this.state.deleted.map((item) => [item.id, item]));
     const sentChanges = new Map((Array.isArray(request.changes) ? request.changes : []).map((change) => [change.id, change]));
     const sentDeletions = new Map((Array.isArray(request.deletions) ? request.deletions : []).map((item) => [item.id, item]));
@@ -314,25 +351,31 @@ export class NoteStore {
       if (!this.state.windows[remote.id]) this.state.windows[remote.id] = createWindowState({ open: false });
     }
 
-    this.state.notes = nextNotes;
+    this.state.notes = [...nextNotes, ...drafts];
     this.state.deleted = nextDeleted;
-    const activeIds = new Set(nextNotes.map((note) => note.id));
+    const activeIds = new Set(this.state.notes.map((note) => note.id));
     for (const id of Object.keys(this.state.windows)) {
       if (!activeIds.has(id)) delete this.state.windows[id];
     }
     void this.save();
     return {
       conflicts: Array.isArray(snapshot.conflicts) ? snapshot.conflicts.filter(isRemoteNote).map((note) => note.id) : [],
-      notes: this.state.notes.length,
-      pending: this.state.notes.some((note) => note.dirty) || this.state.deleted.some((item) => item.dirty),
+      notes: nextNotes.length,
+      pending: nextNotes.some((note) => note.dirty) || this.state.deleted.some((item) => item.dirty),
     };
   }
 
   async save() {
     this.writeQueue = this.writeQueue
       .then(async () => {
+        const persistedNotes = this.state.notes.filter((note) => !this.isDraft(note.id));
+        const persistedIds = new Set(persistedNotes.map((note) => note.id));
+        const persistedWindows = Object.fromEntries(
+          Object.entries(this.state.windows).filter(([id]) => persistedIds.has(id)),
+        );
+        const persistedState = { ...this.state, notes: persistedNotes, windows: persistedWindows };
         await mkdir(path.dirname(this.filePath), { recursive: true });
-        await writeFile(this.tempPath, JSON.stringify(this.state, null, 2), "utf8");
+        await writeFile(this.tempPath, JSON.stringify(persistedState, null, 2), "utf8");
         await rename(this.tempPath, this.filePath);
       })
       .catch((error) => log.error("保存便签数据失败", error));

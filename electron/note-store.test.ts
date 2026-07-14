@@ -22,6 +22,60 @@ describe("NoteStore", () => {
     await store.save();
   });
 
+  it("keeps an untouched draft out of persistence and sync", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath);
+    await store.load();
+
+    const draft = store.createDraft();
+    store.updateContent(draft.id, { color: "mint" });
+
+    expect(draft.title).toBe("");
+    expect(store.isDraft(draft.id)).toBe(true);
+    expect(store.listSummaries()).toEqual([]);
+    expect(store.listSummaries(true)).toEqual([expect.objectContaining({ id: draft.id, title: "" })]);
+    expect(store.buildSyncRequest().changes).toEqual([]);
+    const syncResult = store.applySyncResponse({ notes: [], deleted: [] }, store.buildSyncRequest());
+    expect(syncResult.pending).toBe(false);
+    expect(store.getNote(draft.id)).not.toBeNull();
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+    expect(restored.getNote(draft.id)).toBeNull();
+
+    expect(store.discardDraft(draft.id)).toBe(true);
+    expect(store.getNote(draft.id)).toBeNull();
+    expect(store.state.deleted).toEqual([]);
+  });
+
+  it("commits a draft on its first content edit and never treats it as a draft again", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath);
+    await store.load();
+    const titleDraft = store.createDraft();
+    const markdownDraft = store.createDraft();
+
+    store.updateContent(titleDraft.id, { title: "标题内容" });
+    store.updateContent(markdownDraft.id, { markdown: "正文内容" });
+
+    expect(store.isDraft(titleDraft.id)).toBe(false);
+    expect(store.isDraft(markdownDraft.id)).toBe(false);
+    expect(store.buildSyncRequest().changes.map((note) => note.id)).toEqual(expect.arrayContaining([
+      titleDraft.id,
+      markdownDraft.id,
+    ]));
+
+    store.updateContent(titleDraft.id, { title: "", markdown: "" });
+    expect(store.discardDraft(titleDraft.id)).toBe(false);
+    expect(store.getNote(titleDraft.id)).toMatchObject({ title: "", markdown: "" });
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+    expect(restored.getNote(titleDraft.id)).toMatchObject({ title: "", markdown: "" });
+  });
+
   it("keeps content revision unchanged when window bounds change", async () => {
     const store = testStore();
     await store.load();

@@ -27,7 +27,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   revealGroup: () => ipcRenderer.send("group:reveal"),
   hideGroup: () => ipcRenderer.send("group:hide"),
   cancelGroupHide: () => ipcRenderer.send("group:cancel-hide"),
-  listNotes: () => ipcRenderer.invoke("notes:list"),
+  listNotes: (includeDrafts = false) => ipcRenderer.invoke("notes:list", includeDrafts),
   activateDockedNote: (id) => ipcRenderer.invoke("group:activate-note", id),
   closeDockedNote: (id) => ipcRenderer.invoke("group:close-docked-note", id),
   setShelfExpanded: (expanded) => ipcRenderer.send("shelf:set-expanded", expanded),
