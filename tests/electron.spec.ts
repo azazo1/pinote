@@ -130,6 +130,40 @@ test("Tab and Shift+Tab indent Markdown list items", async () => {
   }
 });
 
+test("空选区复制或剪切当前行", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-line-clipboard-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+
+    const noteWindowCreated = app.waitForEvent("window");
+    await mainWindow.locator(".main-create-button").click();
+    const noteWindow = await noteWindowCreated;
+    await noteWindow.bringToFront();
+    await expect(noteWindow.locator(".title-input")).toBeFocused();
+    const editor = noteWindow.locator(".note-editor .cm-content");
+    await noteWindow.locator(".title-input").press("Enter");
+    await editor.fill("第一行\n第二行\n第三行");
+    await editor.press("ArrowUp");
+
+    const primaryModifier = process.platform === "darwin" ? "Meta" : "Control";
+    await editor.press(`${primaryModifier}+c`);
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe("第二行");
+    await expect(editor.locator(".cm-line")).toHaveText(["第一行", "第二行", "第三行"]);
+
+    await editor.press(`${primaryModifier}+x`);
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe("第二行");
+    await expect(editor.locator(".cm-line")).toHaveText(["第一行", "第三行"]);
+  } finally {
+    await app.close();
+  }
+});
+
 test("编辑侧边便签后切换应用会自动收回", async () => {
   test.skip(process.platform !== "darwin", "仅在 macOS 验证跨应用焦点切换");
   const app = await electron.launch({
