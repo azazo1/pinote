@@ -471,12 +471,12 @@ export class WindowManager {
     ) return false;
     const wasDocked = this.store.isDocked(id);
     if (wasDocked) this.detachDockedNote(id, { restoreBounds: false });
-    const current = window.getBounds();
+    const { width, height } = session.fullBounds;
     const proposed = {
       x: Math.round(x),
       y: Math.round(y),
-      width: current.width,
-      height: current.height,
+      width,
+      height,
     };
     const display = screen.getDisplayMatching(proposed);
     const targets = [];
@@ -489,7 +489,7 @@ export class WindowManager {
       targets.push(bounds);
     }
     const snapped = snapBounds(proposed, targets, display.workArea);
-    session.fullBounds = { ...snapped, width: proposed.width, height: proposed.height };
+    session.fullBounds = { ...snapped, width, height };
     const proximityHysteresis = session.previewing || session.returning ? 16 : 0;
     session.nearShelf = !wasDocked && this.shouldDockAtShelf({ x: pointerX, y: pointerY }, proximityHysteresis);
     if (session.nearShelf) {
@@ -501,7 +501,9 @@ export class WindowManager {
       return true;
     }
     if (session.returning) return true;
-    window.setPosition(snapped.x, snapped.y);
+    // Windows 移动无边框窗口时可能返回瞬时尺寸, 因此写回拖动开始时锁定的宽高.
+    if (process.platform === "win32") window.setBounds(session.fullBounds, false);
+    else window.setPosition(snapped.x, snapped.y);
     return true;
   }
 
