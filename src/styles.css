@@ -1237,6 +1237,10 @@ button {
   flex: 0 0 var(--shelf-editor-width);
 }
 
+.shelf-editor.is-drag-source {
+  opacity: 0;
+}
+
 .shelf-shell.is-editor-left .shelf-editor {
   order: 0;
 }

@@ -108,6 +108,7 @@ test("侧边架全屏拖放和收纳动画", async () => {
     await shelf.locator(".shelf-editor .note-editor .cm-content").fill(draggedMarkdown);
     await beginShelfEditorNoteDrag(shelf, 61);
     await expect.poll(() => app.windows().some((page) => page.url().includes(`noteId=${firstId}`))).toBe(true);
+    await expect(shelf.locator(".shelf-editor")).toHaveCSS("opacity", "0");
     await endShelfEditorNoteDrag(shelf, 61);
     await expect.poll(() => readDockState(shelf, firstId)).toBe("free");
     first = await waitForWindow(app, `noteId=${firstId}`);

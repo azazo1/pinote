@@ -455,7 +455,10 @@ export default function ShelfApp() {
           />
         </section>
         {hostedId && (
-          <section className={`shelf-editor${activeId === hostedId ? " is-active" : ""}`} aria-label="侧边便签编辑区">
+          <section
+            className={`shelf-editor${activeId === hostedId ? " is-active" : ""}${draggingNoteId === hostedId ? " is-drag-source" : ""}`}
+            aria-label="侧边便签编辑区"
+          >
             <NoteWorkspace
               key={hostedId}
               ref={workspaceRef}
