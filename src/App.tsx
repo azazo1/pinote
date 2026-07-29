@@ -11,7 +11,7 @@ import { TitleBar } from "./components/TitleBar";
 import { WindowResizeHandles } from "./components/WindowResizeHandles";
 import { dateLabel } from "./lib/date-label";
 import { combineTagSources, extractInlineTags, normalizeTags, reconcileInlineTags } from "./lib/note-metadata";
-import type { Note, PlatformCapabilities, SyncStatus } from "./types";
+import type { Note, PlatformCapabilities, SyncStatus, WindowBounds } from "./types";
 
 type ContentPatch = Pick<Partial<Note>, "title" | "markdown" | "color" | "groupName" | "tags">;
 
@@ -32,10 +32,20 @@ interface NoteWorkspaceProps {
   noteId: string;
   initialFocus?: string | null;
   presentation?: "window" | "shelf";
+  onEmbeddedDragStart?: (screenX: number, screenY: number, sourceBounds: WindowBounds) => void;
+  onEmbeddedDragMove?: (screenX: number, screenY: number) => void;
+  onEmbeddedDragEnd?: () => void;
 }
 
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>(function NoteWorkspace(
-  { noteId, initialFocus = null, presentation = "window" },
+  {
+    noteId,
+    initialFocus = null,
+    presentation = "window",
+    onEmbeddedDragStart,
+    onEmbeddedDragMove,
+    onEmbeddedDragEnd,
+  },
   ref,
 ) {
   const [note, setNote] = useState<Note | null>(null);
@@ -403,6 +413,9 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
         onCollapse={toggleCollapse}
         nativeDrag={capabilities.wayland}
         embedded={embedded}
+        onEmbeddedDragStart={onEmbeddedDragStart}
+        onEmbeddedDragMove={onEmbeddedDragMove}
+        onEmbeddedDragEnd={onEmbeddedDragEnd}
       />
 
       {pickerOpen && (

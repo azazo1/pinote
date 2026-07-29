@@ -258,6 +258,7 @@ export default function ShelfApp() {
   }
 
   function beginNoteDrag(id: string, screenX: number, screenY: number, sourceBounds: WindowBounds) {
+    if (noteDragId.current) return;
     cancelHover();
     window.noteAPI.cancelGroupHide();
     noteDragId.current = id;
@@ -461,6 +462,11 @@ export default function ShelfApp() {
               noteId={hostedId}
               initialFocus={initialTitleFocusId === hostedId ? "title" : null}
               presentation="shelf"
+              onEmbeddedDragStart={(screenX, screenY, sourceBounds) => (
+                beginNoteDrag(hostedId, screenX, screenY, sourceBounds)
+              )}
+              onEmbeddedDragMove={(screenX, screenY) => moveNoteDrag(hostedId, screenX, screenY)}
+              onEmbeddedDragEnd={() => endNoteDrag(hostedId)}
             />
           </section>
         )}

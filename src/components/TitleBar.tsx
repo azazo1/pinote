@@ -1,5 +1,7 @@
 import { PanelRightClose, PanelRightOpen, Pin, X } from "lucide-react";
 import { useRef, type PointerEvent } from "react";
+import { shouldStartShelfDrag } from "../lib/shelf-drag";
+import type { WindowBounds } from "../types";
 import { IconButton } from "./IconButton";
 
 interface TitleBarProps {
@@ -14,47 +16,88 @@ interface TitleBarProps {
   onCollapse: () => void;
   nativeDrag?: boolean;
   embedded?: boolean;
+  onEmbeddedDragStart?: (screenX: number, screenY: number, sourceBounds: WindowBounds) => void;
+  onEmbeddedDragMove?: (screenX: number, screenY: number) => void;
+  onEmbeddedDragEnd?: () => void;
 }
 
 export function TitleBar(props: TitleBarProps) {
-  const drag = useRef<{ pointerX: number; pointerY: number; windowX: number; windowY: number; moved: boolean } | null>(null);
+  const drag = useRef<{
+    pointerId: number;
+    pointerX: number;
+    pointerY: number;
+    windowX: number;
+    windowY: number;
+    moved: boolean;
+    sourceBounds: WindowBounds | null;
+  } | null>(null);
 
   function onPointerDown(event: PointerEvent<HTMLElement>) {
-    if (props.nativeDrag || props.embedded) return;
-    if (event.button !== 0) return;
+    if (props.nativeDrag || event.button !== 0 || !event.isPrimary) return;
+    if (props.embedded && !props.onEmbeddedDragStart) return;
+    const noteBounds = event.currentTarget.closest<HTMLElement>(".note-shell")?.getBoundingClientRect();
+    if (props.embedded && !noteBounds) return;
     drag.current = {
+      pointerId: event.pointerId,
       pointerX: event.screenX,
       pointerY: event.screenY,
       windowX: window.screenX,
       windowY: window.screenY,
       moved: false,
+      sourceBounds: props.embedded && noteBounds ? {
+        x: Math.round(window.screenX + noteBounds.left),
+        y: Math.round(window.screenY + noteBounds.top),
+        width: Math.round(noteBounds.width),
+        height: Math.round(noteBounds.height),
+      } : null,
     };
-    window.noteAPI.beginWindowMove(props.noteId);
+    if (!props.embedded) window.noteAPI.beginWindowMove(props.noteId);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function onPointerMove(event: PointerEvent<HTMLElement>) {
-    if (props.nativeDrag || props.embedded) return;
-    if (!drag.current) return;
-    const dx = event.screenX - drag.current.pointerX;
-    const dy = event.screenY - drag.current.pointerY;
-    if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
-    if (drag.current.moved) {
+    const current = drag.current;
+    if (props.nativeDrag || !current || current.pointerId !== event.pointerId) return;
+    if ((event.buttons & 1) === 0) {
+      finishPointerDrag(event);
+      return;
+    }
+    const dx = event.screenX - current.pointerX;
+    const dy = event.screenY - current.pointerY;
+    if (!current.moved) {
+      const shouldStart = props.embedded ? shouldStartShelfDrag(dx, dy) : Math.abs(dx) + Math.abs(dy) > 4;
+      if (!shouldStart) return;
+      current.moved = true;
+      if (props.embedded && current.sourceBounds) {
+        props.onEmbeddedDragStart?.(event.screenX, event.screenY, current.sourceBounds);
+      }
+    }
+    if (props.embedded) {
+      event.preventDefault();
+      props.onEmbeddedDragMove?.(event.screenX, event.screenY);
+    } else {
       window.noteAPI.moveWindow(
         props.noteId,
-        drag.current.windowX + dx,
-        drag.current.windowY + dy,
+        current.windowX + dx,
+        current.windowY + dy,
         event.screenX,
         event.screenY,
       );
     }
   }
 
-  function onPointerUp() {
-    if (props.nativeDrag || props.embedded) return;
-    if (!drag.current) return;
+  function finishPointerDrag(event: PointerEvent<HTMLElement>) {
+    const current = drag.current;
+    if (props.nativeDrag || !current || current.pointerId !== event.pointerId) return;
     drag.current = null;
-    window.noteAPI.endWindowMove(props.noteId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (props.embedded) {
+      if (current.moved) props.onEmbeddedDragEnd?.();
+    } else {
+      window.noteAPI.endWindowMove(props.noteId);
+    }
   }
 
   return (
@@ -62,9 +105,9 @@ export function TitleBar(props: TitleBarProps) {
       className={`title-bar${props.nativeDrag ? " uses-native-drag" : ""}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onLostPointerCapture={onPointerUp}
+      onPointerUp={finishPointerDrag}
+      onPointerCancel={finishPointerDrag}
+      onLostPointerCapture={finishPointerDrag}
       onDoubleClick={props.onCollapse}
     >
       <span className="collapsed-title">{props.title || "无标题"}</span>

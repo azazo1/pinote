@@ -102,12 +102,17 @@ test("侧边架全屏拖放和收纳动画", async () => {
 
     await shelf.evaluate(() => window.noteAPI.setShelfExpanded(true));
     await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
-    await beginShelfNoteDrag(shelf, firstId, 61);
+    await shelf.locator(`[data-note-id="${firstId}"] .note-list-item`).click();
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBeGreaterThan(200);
+    const draggedMarkdown = "从内嵌便签标题栏拖出的内容";
+    await shelf.locator(".shelf-editor .note-editor .cm-content").fill(draggedMarkdown);
+    await beginShelfEditorNoteDrag(shelf, 61);
     await expect.poll(() => app.windows().some((page) => page.url().includes(`noteId=${firstId}`))).toBe(true);
-    await endShelfNoteDrag(shelf, firstId, 61);
+    await endShelfEditorNoteDrag(shelf, 61);
     await expect.poll(() => readDockState(shelf, firstId)).toBe("free");
     first = await waitForWindow(app, `noteId=${firstId}`);
     await expect(first.locator(".note-shell")).toBeVisible();
+    await expect(first.locator(".note-editor .cm-content")).toHaveText(draggedMarkdown);
 
     await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
     await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
@@ -175,6 +180,47 @@ async function beginShelfNoteDrag(shelf: Page, id: string, pointerId: number) {
 async function endShelfNoteDrag(shelf: Page, id: string, pointerId: number) {
   await shelf.locator(`[data-note-id="${id}"]`).evaluate((item, input) => {
     item.closest<HTMLElement>(".note-list")?.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+      buttons: 0,
+      isPrimary: true,
+      pointerId: input.pointerId,
+    }));
+  }, { pointerId });
+}
+
+async function beginShelfEditorNoteDrag(shelf: Page, pointerId: number) {
+  await shelf.locator(".shelf-editor .title-bar").evaluate((titleBar, input) => {
+    const bar = titleBar as HTMLElement;
+    bar.setPointerCapture = () => {};
+    bar.hasPointerCapture = () => false;
+    bar.releasePointerCapture = () => {};
+    const bounds = bar.getBoundingClientRect();
+    const screenX = window.screenX + bounds.left + 24;
+    const screenY = window.screenY + bounds.top + bounds.height / 2;
+    bar.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+      isPrimary: true,
+      pointerId: input.pointerId,
+      screenX,
+      screenY,
+    }));
+    bar.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true,
+      buttons: 1,
+      isPrimary: true,
+      pointerId: input.pointerId,
+      screenX: screenX + (window.screenX > 400 ? -260 : 260),
+      screenY: screenY + 80,
+    }));
+  }, { pointerId });
+}
+
+async function endShelfEditorNoteDrag(shelf: Page, pointerId: number) {
+  await shelf.locator(".shelf-editor .title-bar").evaluate((titleBar, input) => {
+    titleBar.dispatchEvent(new PointerEvent("pointerup", {
       bubbles: true,
       button: 0,
       buttons: 0,
