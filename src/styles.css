@@ -1072,13 +1072,19 @@ button {
 }
 
 .note-list-row:hover .note-list-close,
-.note-list-close:focus-visible {
+.note-list-close:focus-visible,
+.note-list-close.is-confirming {
   opacity: 1;
 }
 
 .note-list-close:hover {
   color: #8d2d27;
   background: rgb(141 45 39 / 9%);
+}
+
+.note-list-close.is-confirming {
+  color: #76241f;
+  background: rgb(141 45 39 / 16%);
 }
 
 .note-list-drop-slot {

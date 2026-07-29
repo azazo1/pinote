@@ -76,7 +76,11 @@ test("侧边架全屏拖放和收纳动画", async () => {
       Math.abs(expandedShelfBounds.x + expandedShelfBounds.width - createdBounds.x),
     );
     expect(horizontalGap).toBe(10);
-    await shelf.locator(`[data-note-id="${createdId}"] .note-list-close`).click();
+    const createdCloseButton = shelf.locator(`[data-note-id="${createdId}"] .note-list-close`);
+    await createdCloseButton.click();
+    await expect(createdCloseButton).toHaveClass(/is-confirming/);
+    await expect(shelf.locator(".note-list-item")).toHaveCount(3);
+    await createdCloseButton.click();
     await expect(shelf.locator(".note-list-item")).toHaveCount(2);
 
     const platform = await app.evaluate(() => process.platform);
@@ -137,6 +141,7 @@ test("侧边架全屏拖放和收纳动画", async () => {
     await expect.poll(() => readDockState(first, firstId)).toBe("free");
     await expect.poll(() => isWindowVisible(app, first.url())).toBe(true);
 
+    await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
     await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
     await expect.poll(() => first.evaluate(async (id) => {
       const note = (await window.noteAPI.getNote(id)).note;

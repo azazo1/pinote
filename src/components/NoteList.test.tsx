@@ -44,6 +44,37 @@ describe("NoteList", () => {
     expect(onDragEnd).toHaveBeenCalledTimes(2);
   });
 
+  it("第二次点击关闭按钮才关闭便签", () => {
+    const onClose = vi.fn();
+    const view = render(<NoteList notes={notes} onSelect={vi.fn()} onClose={onClose} />);
+    const firstClose = view.getByRole("button", { name: "关闭 第一张" });
+
+    fireEvent.click(firstClose);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(firstClose.classList.contains("is-confirming")).toBe(true);
+    expect(firstClose.getAttribute("aria-label")).toBe("确认关闭 第一张");
+
+    fireEvent.click(firstClose);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("first");
+  });
+
+  it("点击另一张便签的关闭按钮会转移确认状态", () => {
+    const onClose = vi.fn();
+    const view = render(<NoteList notes={notes} onSelect={vi.fn()} onClose={onClose} />);
+    const firstClose = view.getByRole("button", { name: "关闭 第一张" });
+    const secondClose = view.getByRole("button", { name: "关闭 第二张" });
+
+    fireEvent.click(firstClose);
+    fireEvent.click(secondClose);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(firstClose.classList.contains("is-confirming")).toBe(false);
+    expect(secondClose.classList.contains("is-confirming")).toBe(true);
+  });
+
   it("使用占位条推动其他便签条让位", () => {
     const view = render(
       <NoteList

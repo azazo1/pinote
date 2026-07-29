@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useRef, type PointerEvent } from "react";
+import { useRef, useState, type PointerEvent } from "react";
 import type { NoteSummary, WindowBounds } from "../types";
 import { noteColors } from "./ColorPicker";
 
@@ -41,6 +41,16 @@ export function NoteList({
   const listRef = useRef<HTMLDivElement>(null);
   const handledPointerClickId = useRef<string | null>(null);
   const suppressClickId = useRef<string | null>(null);
+  const [closeConfirmationId, setCloseConfirmationId] = useState<string | null>(null);
+
+  function requestClose(id: string) {
+    if (closeConfirmationId !== id) {
+      setCloseConfirmationId(id);
+      return;
+    }
+    setCloseConfirmationId(null);
+    onClose?.(id);
+  }
 
   function onPointerDown(event: PointerEvent<HTMLButtonElement>, id: string) {
     if (!onDragStart || event.button !== 0 || !event.isPrimary || drag.current) return;
@@ -122,6 +132,7 @@ export function NoteList({
       {notes.map((note) => {
         const palette = noteColors[note.color as keyof typeof noteColors] ?? noteColors.lemon;
         const isDragSource = draggingId === note.id;
+        const isCloseConfirming = closeConfirmationId === note.id;
         const rowIndex = isDragSource ? -1 : visibleIndex++;
         const shiftsForDrop = dragReturnIndex !== null && dragReturnIndex !== undefined && rowIndex >= dragReturnIndex;
         return (
@@ -144,11 +155,12 @@ export function NoteList({
             {onClose && (
               <button
                 type="button"
-                className="note-list-close"
-                aria-label={`关闭 ${note.title || "无标题"}`}
-                title="关闭便签栏"
+                className={`note-list-close${isCloseConfirming ? " is-confirming" : ""}`}
+                aria-label={`${isCloseConfirming ? "确认关闭" : "关闭"} ${note.title || "无标题"}`}
+                aria-pressed={isCloseConfirming}
+                title={isCloseConfirming ? "再次点击关闭便签栏" : "关闭便签栏"}
                 onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => onClose(note.id)}
+                onClick={() => requestClose(note.id)}
               >
                 <X size={13} aria-hidden="true" />
               </button>
