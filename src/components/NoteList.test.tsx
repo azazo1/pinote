@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NoteList } from "./NoteList";
 import type { NoteSummary } from "../types";
@@ -73,6 +73,49 @@ describe("NoteList", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(firstClose.classList.contains("is-confirming")).toBe(false);
     expect(secondClose.classList.contains("is-confirming")).toBe(true);
+  });
+
+  it("点击便签条会取消关闭确认状态", () => {
+    const onClose = vi.fn();
+    const view = render(<NoteList notes={notes} onSelect={vi.fn()} onClose={onClose} />);
+    const firstClose = view.getByRole("button", { name: "关闭 第一张" });
+
+    fireEvent.click(firstClose);
+    fireEvent.click(noteButton(view.container, "first"));
+
+    expect(firstClose.classList.contains("is-confirming")).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("等待一段时间会取消关闭确认状态", () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<NoteList notes={notes} onSelect={vi.fn()} onClose={vi.fn()} />);
+      const firstClose = view.getByRole("button", { name: "关闭 第一张" });
+
+      fireEvent.click(firstClose);
+      act(() => vi.advanceTimersByTime(2_000));
+
+      expect(firstClose.classList.contains("is-confirming")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("侧边架收起时会取消关闭确认状态", () => {
+    const onClose = vi.fn();
+    const view = render(
+      <NoteList notes={notes} closeConfirmationResetKey={true} onSelect={vi.fn()} onClose={onClose} />,
+    );
+    const firstClose = view.getByRole("button", { name: "关闭 第一张" });
+
+    fireEvent.click(firstClose);
+    view.rerender(
+      <NoteList notes={notes} closeConfirmationResetKey={false} onSelect={vi.fn()} onClose={onClose} />,
+    );
+
+    expect(firstClose.classList.contains("is-confirming")).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("使用占位条推动其他便签条让位", () => {

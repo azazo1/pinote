@@ -1,15 +1,17 @@
 import { X } from "lucide-react";
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { NoteSummary, WindowBounds } from "../types";
 import { noteColors } from "./ColorPicker";
 
 const NOTE_DRAG_THRESHOLD = 8;
+const CLOSE_CONFIRMATION_IDLE_MS = 2_000;
 
 interface NoteListProps {
   notes: NoteSummary[];
   activeId?: string | null;
   draggingId?: string | null;
   dragReturnIndex?: number | null;
+  closeConfirmationResetKey?: boolean;
   onSelect: (id: string) => void;
   onClose?: (id: string) => void;
   onDragStart?: (id: string, screenX: number, screenY: number, sourceBounds: WindowBounds) => void;
@@ -31,6 +33,7 @@ export function NoteList({
   activeId,
   draggingId,
   dragReturnIndex,
+  closeConfirmationResetKey,
   onSelect,
   onClose,
   onDragStart,
@@ -51,6 +54,53 @@ export function NoteList({
     setCloseConfirmationId(null);
     onClose?.(id);
   }
+
+  useEffect(() => {
+    if (closeConfirmationId === null) return;
+    const timer = window.setTimeout(() => setCloseConfirmationId(null), CLOSE_CONFIRMATION_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [closeConfirmationId]);
+
+  useEffect(() => {
+    setCloseConfirmationId(null);
+  }, [closeConfirmationResetKey]);
+
+  useEffect(() => {
+    if (closeConfirmationId === null) return;
+    function clearOnOtherOption(event: Event) {
+      if (event.type === "contextmenu") {
+        setCloseConfirmationId(null);
+        return;
+      }
+      if (event.type === "keydown") {
+        const key = (event as KeyboardEvent).key;
+        if (key !== "Enter" && key !== " ") {
+          setCloseConfirmationId(null);
+          return;
+        }
+      }
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(".note-list-close")) {
+        setCloseConfirmationId(null);
+      }
+    }
+    document.addEventListener("pointerdown", clearOnOtherOption);
+    document.addEventListener("pointerup", clearOnOtherOption);
+    document.addEventListener("click", clearOnOtherOption);
+    document.addEventListener("keydown", clearOnOtherOption);
+    document.addEventListener("focusin", clearOnOtherOption);
+    document.addEventListener("contextmenu", clearOnOtherOption);
+    window.addEventListener("blur", clearOnOtherOption);
+    return () => {
+      document.removeEventListener("pointerdown", clearOnOtherOption);
+      document.removeEventListener("pointerup", clearOnOtherOption);
+      document.removeEventListener("click", clearOnOtherOption);
+      document.removeEventListener("keydown", clearOnOtherOption);
+      document.removeEventListener("focusin", clearOnOtherOption);
+      document.removeEventListener("contextmenu", clearOnOtherOption);
+      window.removeEventListener("blur", clearOnOtherOption);
+    };
+  }, [closeConfirmationId]);
 
   function onPointerDown(event: PointerEvent<HTMLButtonElement>, id: string) {
     if (!onDragStart || event.button !== 0 || !event.isPrimary || drag.current) return;

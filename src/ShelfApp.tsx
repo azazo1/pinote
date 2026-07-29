@@ -346,6 +346,7 @@ export default function ShelfApp() {
         </div>
         <NoteList
           notes={dockedNotes}
+          closeConfirmationResetKey={expanded}
           draggingId={draggingNoteId}
           dragReturnIndex={dragReturnIndex}
           onSelect={(id) => void window.noteAPI.activateDockedNote(id)}
