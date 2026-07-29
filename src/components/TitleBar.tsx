@@ -13,13 +13,14 @@ interface TitleBarProps {
   onClose: () => void;
   onCollapse: () => void;
   nativeDrag?: boolean;
+  embedded?: boolean;
 }
 
 export function TitleBar(props: TitleBarProps) {
   const drag = useRef<{ pointerX: number; pointerY: number; windowX: number; windowY: number; moved: boolean } | null>(null);
 
   function onPointerDown(event: PointerEvent<HTMLElement>) {
-    if (props.nativeDrag) return;
+    if (props.nativeDrag || props.embedded) return;
     if (event.button !== 0) return;
     drag.current = {
       pointerX: event.screenX,
@@ -33,7 +34,7 @@ export function TitleBar(props: TitleBarProps) {
   }
 
   function onPointerMove(event: PointerEvent<HTMLElement>) {
-    if (props.nativeDrag) return;
+    if (props.nativeDrag || props.embedded) return;
     if (!drag.current) return;
     const dx = event.screenX - drag.current.pointerX;
     const dy = event.screenY - drag.current.pointerY;
@@ -50,7 +51,7 @@ export function TitleBar(props: TitleBarProps) {
   }
 
   function onPointerUp() {
-    if (props.nativeDrag) return;
+    if (props.nativeDrag || props.embedded) return;
     if (!drag.current) return;
     drag.current = null;
     window.noteAPI.endWindowMove(props.noteId);

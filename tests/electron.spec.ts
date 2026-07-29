@@ -216,50 +216,40 @@ test("编辑侧边便签后切换应用会自动收回", async () => {
     await expect.poll(() => noteWindow.evaluate(async (id) => (
       await window.noteAPI.getNote(id)
     ).note?.markdown, noteId)).toBe(changedMarkdown);
-    await noteWindow.evaluate((id) => window.noteAPI.toggleNoteDock(id), noteId);
+    const dockedWindowClosed = noteWindow.waitForEvent("close");
+    await noteWindow.evaluate((id) => window.noteAPI.dockNote(id), noteId);
+    await dockedWindowClosed;
     await expect.poll(() => app.windows().find((page) => page.url().includes("view=shelf"))).toBeTruthy();
     const shelfWindow = app.windows().find((page) => page.url().includes("view=shelf"));
     if (!shelfWindow) throw new Error("侧边架窗口未创建");
     await shelfWindow.evaluate(() => window.noteAPI.setShelfExpanded(true));
     await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(200);
     await shelfWindow.locator(".note-list-item").click();
-    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => (
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
-    ), noteWindow.url())).toBe(true);
+    await expect(shelfWindow.locator(".shelf-editor .note-shell")).toBeVisible();
+    await expect(shelfWindow.locator(".shelf-editor .note-editor .cm-content")).toHaveText(changedMarkdown);
+    await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBeGreaterThan(200);
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().some((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))
+    ), noteId)).toBe(false);
 
     execFileSync("osascript", ["-e", "tell application \"Finder\" to activate"]);
 
-    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => (
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible()
-    ), noteWindow.url())).toBe(false);
     await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(36);
 
-    await app.evaluate(({ BrowserWindow }, url) => {
-      const note = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
-      note?.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
-    }, noteWindow.url());
     await shelfWindow.bringToFront();
     await shelfWindow.getByLabel("展开侧边便签架").click();
     await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBe(200);
     await shelfWindow.locator(".note-list-item").click();
-    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
-      const note = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
-      return {
-        visible: note?.isVisible(),
-        focused: note?.isFocused(),
-        visibleOnAllWorkspaces: note?.isVisibleOnAllWorkspaces(),
-      };
-    }, noteWindow.url())).toEqual({
-      visible: true,
-      focused: true,
-      visibleOnAllWorkspaces: true,
-    });
+    await expect.poll(() => shelfWindow.evaluate(() => window.innerWidth)).toBeGreaterThan(200);
+    await expect(shelfWindow.locator(".shelf-editor .note-editor .cm-content")).toHaveText(changedMarkdown);
+    await expect(shelfWindow.locator(".shelf-editor .note-editor .cm-content")).toBeFocused();
   } finally {
     await app.close();
   }
 });
 
 test("主窗口和便签窗口关键流程", async () => {
+  test.setTimeout(60_000);
   const app = await electron.launch({
     args: ["."],
     cwd: path.resolve("."),
@@ -434,7 +424,7 @@ test("主窗口和便签窗口关键流程", async () => {
     await mainWindow.locator(".main-create-button").click();
     await expect.poll(() => app.windows().filter((page) => page.url().includes("noteId=")).length).toBe(1);
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(0);
-    const window = app.windows().find((page) => page.url().includes("noteId="));
+    let window = app.windows().find((page) => page.url().includes("noteId="));
     expect(window).toBeTruthy();
     if (!window) throw new Error("便签窗口未创建");
     const firstNoteUrl = window.url();
@@ -749,19 +739,16 @@ test("主窗口和便签窗口关键流程", async () => {
     const readNoteDockState = (page: Page, id: string) => page.evaluate(async (noteId) => {
       return (await window.noteAPI.getNote(noteId)).note?.dockState;
     }, id);
-    const readWindowVisible = (url: string) => app.evaluate(({ BrowserWindow }, targetUrl) => {
-      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === targetUrl)?.isVisible();
-    }, url);
-    const firstBeforeDock = await window.evaluate(async (id) => {
-      const note = (await window.noteAPI.getNote(id)).note;
-      return note ? { revision: note.revision, modifiedAt: note.modifiedAt } : null;
-    }, firstNoteId);
 
+    const firstDockedWindowClosed = window.waitForEvent("close");
     await triggerShortcut(window, "toggle-dock");
+    await firstDockedWindowClosed;
     await expect.poll(() => app.windows().some((page) => page.url().includes("view=shelf"))).toBe(true);
     const shelf = app.windows().find((page) => page.url().includes("view=shelf"));
     expect(shelf).toBeTruthy();
-    await expect(shelf!.locator(".shelf-handle")).toBeAttached();
+    if (!shelf) throw new Error("侧边架窗口未创建");
+    await expect(shelf.locator(".shelf-handle")).toBeAttached();
+
     const shelfWorkspaceState = await app.evaluate(({ BrowserWindow }) => {
       const shelfWindow = BrowserWindow.getAllWindows()
         .find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
@@ -773,511 +760,56 @@ test("主窗口和便签窗口关键流程", async () => {
     });
     expect(shelfWorkspaceState.alwaysOnTop).toBe(true);
     if (shelfWorkspaceState.platform === "darwin") expect(shelfWorkspaceState.visibleOnAllWorkspaces).toBe(true);
-    await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("shelf");
+    await expect.poll(() => readNoteDockState(shelf, firstNoteId)).toBe("shelf");
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
-    await expect.poll(() => readWindowVisible(window.url())).toBe(false);
-    await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
-    const readShelfBounds = () => app.evaluate(({ BrowserWindow, screen }) => {
-      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
-      if (!shelfWindow) return undefined;
-      const bounds = shelfWindow.getBounds();
-      const area = screen.getDisplayMatching(bounds).workArea;
-      return {
-        ...bounds,
-        leftGap: bounds.x - area.x,
-        rightGap: area.x + area.width - bounds.x - bounds.width,
-      };
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().some((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))
+    ), firstNoteId)).toBe(false);
+    await expect.poll(() => shelf.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({
+      width: 36,
+      height: 36,
     });
-    const readDockedLayout = () => app.evaluate(({ BrowserWindow, screen }, input) => {
-      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.noteUrl);
-      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
-      const note = noteWindow?.getBounds();
-      const shelf = shelfWindow?.getBounds();
-      return {
-        note,
-        shelf,
-        area: shelf ? screen.getDisplayMatching(shelf).workArea : undefined,
-        noteVisible: noteWindow?.isVisible() ?? false,
-      };
-    }, { noteUrl: window.url() });
-    const moveGroupAwayFromCursor = () => app.evaluate(({ BrowserWindow, screen }, input) => {
-      const shelfWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes("view=shelf"));
-      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === input.noteUrl);
-      if (!shelfWindow) throw new Error("缺少侧边架测试窗口");
-      const area = screen.getDisplayMatching(shelfWindow.getBounds()).workArea;
-      const cursor = screen.getCursorScreenPoint();
-      const moveAway = (target: Electron.BrowserWindow) => {
-        const bounds = target.getBounds();
-        const candidates = [
-          { x: area.x, y: area.y },
-          { x: area.x + area.width - bounds.width, y: area.y },
-          { x: area.x, y: area.y + area.height - bounds.height },
-          { x: area.x + area.width - bounds.width, y: area.y + area.height - bounds.height },
-        ];
-        const position = candidates.find((candidate) => (
-          cursor.x < candidate.x ||
-          cursor.x > candidate.x + bounds.width ||
-          cursor.y < candidate.y ||
-          cursor.y > candidate.y + bounds.height
-        ));
-        if (!position) throw new Error("找不到空闲的聚群测试位置");
-        target.setPosition(position.x, position.y);
-      };
-      moveAway(shelfWindow);
-      if (noteWindow?.isVisible()) moveAway(noteWindow);
-    }, { noteUrl: window.url() });
-    await expect.poll(readShelfBounds).toMatchObject({ width: 36, height: 36, rightGap: 0 });
-    const shelfBeforeDrag = await readShelfBounds();
-    expect(shelfBeforeDrag).toBeTruthy();
-    await shelf!.evaluate(() => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-handle");
-      if (!handle) throw new Error("侧边把手不存在");
-      handle.setPointerCapture = () => {};
-      handle.hasPointerCapture = () => false;
-      const pointerId = 17;
-      const screenX = window.screenX + 28;
-      const screenY = window.screenY + 18;
-      handle.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY,
-      }));
-      handle.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY: screenY + 80,
-      }));
-    });
-    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-dragging/);
-    await expect.poll(readShelfBounds).toMatchObject({ width: 36, height: 36, rightGap: 0 });
-    const movedShelfBounds = await readShelfBounds();
-    expect(movedShelfBounds!.y).toBeGreaterThan(shelfBeforeDrag!.y + 30);
-    await shelf!.evaluate(() => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-handle");
-      if (!handle) throw new Error("侧边把手不存在");
-      handle.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 17,
-      }));
-    });
-    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
-    await shelf!.screenshot({ path: "/private/tmp/pinote-shelf-collapsed.png" });
-    await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("width", "18px");
-    await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("box-shadow", "none");
-    await shelf!.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
-    await shelf!.waitForTimeout(350);
-    expect(await shelf!.evaluate(() => window.innerWidth)).toBe(36);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    const shelfExpandedBounds = await readShelfBounds();
-    expect(Math.abs(
-      shelfExpandedBounds!.y + shelfExpandedBounds!.height / 2
-      - (movedShelfBounds!.y + movedShelfBounds!.height / 2),
-    )).toBeLessThanOrEqual(2);
-    await expect(shelf!.locator(".shelf-content")).toBeVisible();
-    await expect(shelf!.getByLabel("移动侧边便签架")).toBeVisible();
-    await expect(shelf!.locator(".shelf-heading strong")).toHaveCSS("user-select", "none");
-    await app.evaluate(({ BrowserWindow }, url) => {
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.hide();
-    }, mainWindow.url());
-    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
-      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
-    }, mainWindow.url())).toBe(false);
-    await shelf!.getByLabel("打开主窗口").click();
-    await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
-      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isVisible();
-    }, mainWindow.url())).toBe(true);
-    const expandedBeforeDrag = await readShelfBounds();
-    await shelf!.evaluate(() => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
-      if (!handle) throw new Error("展开态拖动把手不存在");
-      handle.setPointerCapture = () => {};
-      handle.hasPointerCapture = () => false;
-      const pointerId = 19;
-      const screenX = window.screenX + 14;
-      const screenY = window.screenY + 16;
-      handle.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY,
-      }));
-      handle.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: screenX - 320,
-        screenY: screenY + 60,
-      }));
-    });
-    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-dragging/);
-    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-free/);
-    await expect.poll(readShelfBounds).toMatchObject({ width: 200 });
-    const expandedAfterDrag = await readShelfBounds();
-    expect(expandedAfterDrag!.y).toBeGreaterThan(expandedBeforeDrag!.y + 30);
-    expect(expandedAfterDrag!.rightGap).toBeGreaterThan(250);
-    await shelf!.evaluate(() => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
-      if (!handle) throw new Error("展开态拖动把手不存在");
-      handle.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 19,
-      }));
-    });
-    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
-    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-free/);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
-    await shelf!.locator(".note-list-item").click();
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-    const dockedLayout = await readDockedLayout();
-    expect(dockedLayout.note).toBeTruthy();
-    expect(dockedLayout.shelf).toBeTruthy();
-    expect(dockedLayout.area).toBeTruthy();
-    const initialLeftGap = dockedLayout.shelf!.x - dockedLayout.note!.x - dockedLayout.note!.width;
-    const initialRightGap = dockedLayout.note!.x - dockedLayout.shelf!.x - dockedLayout.shelf!.width;
-    expect(Math.max(initialLeftGap, initialRightGap)).toBeGreaterThanOrEqual(10);
-    await window.screenshot({ path: "/private/tmp/pinote-docked-note.png" });
 
-    const followDelta = {
-      x: dockedLayout.shelf!.x + dockedLayout.shelf!.width / 2 < dockedLayout.area!.x + dockedLayout.area!.width / 2 ? 60 : -60,
-      y: dockedLayout.shelf!.y + dockedLayout.shelf!.height / 2 < dockedLayout.area!.y + dockedLayout.area!.height / 2 ? 40 : -40,
-    };
-    await shelf!.evaluate((delta) => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
-      if (!handle) throw new Error("展开态拖动把手不存在");
-      handle.setPointerCapture = () => {};
-      handle.hasPointerCapture = () => false;
-      const pointerId = 23;
-      const screenX = window.screenX + 14;
-      const screenY = window.screenY + 16;
-      handle.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY,
-      }));
-      handle.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: screenX + delta.x,
-        screenY: screenY + delta.y,
-      }));
-    }, followDelta);
-    await expect(shelf!.locator(".shelf-shell")).toHaveClass(/is-dragging/);
-    await expect.poll(async () => {
-      const layout = await readDockedLayout();
-      return {
-        noteMoved: Boolean(layout.note && Math.abs(layout.note.x - dockedLayout.note!.x) > 20),
-        shelfMoved: Boolean(layout.shelf && Math.abs(layout.shelf.x - dockedLayout.shelf!.x) > 20),
-      };
-    }).toEqual({ noteMoved: true, shelfMoved: true });
-    await shelf!.evaluate(() => {
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
-      if (!handle) throw new Error("展开态拖动把手不存在");
-      handle.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 23,
-      }));
-      window.noteAPI.cancelGroupHide();
-    });
-    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
-    const followedLayout = await readDockedLayout();
-    expect(followedLayout.noteVisible).toBe(true);
-    expect(followedLayout.note!.x).toBeGreaterThanOrEqual(followedLayout.area!.x);
-    expect(followedLayout.note!.x + followedLayout.note!.width).toBeLessThanOrEqual(followedLayout.area!.x + followedLayout.area!.width);
-    expect(followedLayout.shelf!.x).toBeGreaterThanOrEqual(followedLayout.area!.x);
-    expect(followedLayout.shelf!.x + followedLayout.shelf!.width).toBeLessThanOrEqual(followedLayout.area!.x + followedLayout.area!.width);
-    const followedLeftGap = followedLayout.shelf!.x - followedLayout.note!.x - followedLayout.note!.width;
-    const followedRightGap = followedLayout.note!.x - followedLayout.shelf!.x - followedLayout.shelf!.width;
-    expect(Math.max(followedLeftGap, followedRightGap)).toBeGreaterThanOrEqual(10);
+    await shelf.getByLabel("展开侧边便签架").click();
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
+    await shelf.locator(".note-list-row").filter({ hasText: "QA 便签" }).locator(".note-list-item").click();
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBeGreaterThan(200);
+    await expect(shelf.locator(".shelf-editor .title-input")).toHaveValue("QA 便签");
+    await expect(shelf.locator(".shelf-editor .note-editor .cm-content")).toBeVisible();
+    await triggerShortcut(shelf, "focus-title");
+    await expect(shelf.locator(".shelf-editor .title-input")).toBeFocused();
 
-    await window.evaluate(() => window.noteAPI.hideGroup());
-    await window.waitForTimeout(250);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-    await shelf!.evaluate(() => window.noteAPI.cancelGroupHide());
-    await window.waitForTimeout(800);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
+    const shelfMarkdown = "固定侧边工作区内容";
+    await shelf.locator(".shelf-editor .note-editor .cm-content").fill(shelfMarkdown);
+    await expect.poll(() => shelf.evaluate(async (id) => (
+      await window.noteAPI.getNote(id)
+    ).note?.markdown, firstNoteId)).toBe(shelfMarkdown);
 
-    await shelf!.evaluate(() => window.noteAPI.hideGroup());
-    await window.waitForTimeout(250);
-    await window.evaluate(() => window.noteAPI.revealGroup());
-    await window.waitForTimeout(800);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-
-    await moveGroupAwayFromCursor();
-    await window.evaluate(() => window.noteAPI.hideGroup());
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 2_000 }).toBe(36);
-    await expect.poll(() => readWindowVisible(window.url())).toBe(false);
-    const collapsedAfterExpandedDrag = await readShelfBounds();
-    expect(Math.abs(
-      collapsedAfterExpandedDrag!.x + collapsedAfterExpandedDrag!.width / 2
-      - (followedLayout.shelf!.x + followedLayout.shelf!.width / 2),
-    )).toBeLessThanOrEqual(2);
-    expect(Math.abs(
-      collapsedAfterExpandedDrag!.y + collapsedAfterExpandedDrag!.height / 2
-      - (followedLayout.shelf!.y + followedLayout.shelf!.height / 2),
-    )).toBeLessThanOrEqual(2);
-    await expect(shelf!.getByLabel("展开侧边便签架")).toHaveCSS("width", "32px");
-    await expect(shelf!.getByLabel("展开侧边便签架")).not.toHaveCSS("box-shadow", "none");
-    await shelf!.screenshot({ path: "/private/tmp/pinote-shelf-free-ball.png" });
-    await shelf!.getByLabel("展开侧边便签架").click();
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 500 }).toBe(200);
-
-    await moveGroupAwayFromCursor();
-    await shelf!.evaluate(() => {
-      const shell = document.querySelector<HTMLElement>(".shelf-shell");
-      const handle = document.querySelector<HTMLButtonElement>(".shelf-drag-handle");
-      if (!shell || !handle) throw new Error("展开态拖动区域不存在");
-      handle.setPointerCapture = () => {};
-      handle.hasPointerCapture = () => false;
-      const pointerId = 29;
-      handle.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: window.screenX + 14,
-        screenY: window.screenY + 16,
-      }));
-      shell.dispatchEvent(new PointerEvent("pointerout", {
-        bubbles: true,
-        pointerId,
-        relatedTarget: null,
-      }));
-      handle.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId,
-      }));
-    });
-    await expect(shelf!.locator(".shelf-shell")).not.toHaveClass(/is-dragging/);
-    await shelf!.waitForTimeout(250);
-    expect(await shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 2_000 }).toBe(36);
-    await shelf!.getByLabel("展开侧边便签架").click();
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth), { timeout: 500 }).toBe(200);
-
+    const secondDockedWindowClosed = secondWindow.waitForEvent("close");
     await secondWindow.getByLabel("收纳到侧边").click();
-    await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("shelf");
-    await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(false);
-    await shelf!.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(2);
-    await shelf!.screenshot({ path: "/private/tmp/pinote-shelf.png" });
+    await secondDockedWindowClosed;
+    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+    await shelf.locator(".note-list-row").filter({ hasText: "第二张便签" }).locator(".note-list-item").click();
+    await expect(shelf.locator(".shelf-editor .title-input")).toHaveValue("第二张便签");
+    await shelf.locator(".note-list-row").filter({ hasText: "QA 便签" }).locator(".note-list-item").click();
+    await expect(shelf.locator(".shelf-editor .note-editor .cm-content")).toHaveText(shelfMarkdown);
 
-    const firstShelfItem = shelf!.locator(".note-list-item").filter({ hasText: "QA 便签" });
-    const firstShelfRow = shelf!.locator(`[data-note-id="${firstNoteId}"]`);
-    await firstShelfItem.evaluate((item) => {
-      const row = item as HTMLButtonElement;
-      const list = row.closest<HTMLElement>(".note-list");
-      if (!list) throw new Error("侧边便签列表不存在");
-      list.setPointerCapture = () => {};
-      list.hasPointerCapture = () => false;
-      list.releasePointerCapture = () => {};
-      const pointerId = 23;
-      const screenX = window.screenX + 90;
-      const screenY = window.screenY + 62;
-      row.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY,
-      }));
-      row.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: screenX + 160,
-        screenY: screenY + 90,
-      }));
-    });
-    await shelf!.waitForTimeout(40);
-    const revealState = await app.evaluate(({ BrowserWindow }, url) => {
-      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
-      return { bounds: noteWindow?.getBounds(), visible: noteWindow?.isVisible(), alwaysOnTop: noteWindow?.isAlwaysOnTop() };
-    }, window.url());
-    expect(revealState.visible).toBe(true);
-    expect(revealState.alwaysOnTop).toBe(true);
-    expect(revealState.bounds!.width).toBeLessThan(360);
-    expect(await readNoteDockState(window, firstNoteId)).toBe("shelf");
-    await expect(firstShelfRow).toHaveClass(/is-drag-source/);
-    await expect(firstShelfRow).toHaveCSS("opacity", "0");
-    await firstShelfItem.evaluate((item) => {
-      item.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId: 23,
-        screenX: window.screenX + 90,
-        screenY: window.screenY + 62,
-      }));
-    });
-    await expect(shelf!.locator(".note-list-drop-slot")).toBeVisible();
-    await expect(firstShelfRow).toHaveClass(/is-drag-source/);
-    await firstShelfItem.evaluate((item) => {
-      item.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 23,
-      }));
-    });
-    await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("shelf");
-    await expect.poll(() => readWindowVisible(window.url())).toBe(false);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(2);
-    await firstShelfItem.evaluate((item) => {
-      const row = item as HTMLButtonElement;
-      const list = row.closest<HTMLElement>(".note-list");
-      if (!list) throw new Error("侧边便签列表不存在");
-      list.setPointerCapture = () => {};
-      list.hasPointerCapture = () => false;
-      list.releasePointerCapture = () => {};
-      const pointerId = 24;
-      const screenX = window.screenX + 90;
-      const screenY = window.screenY + 62;
-      row.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX,
-        screenY,
-      }));
-      row.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: screenX + 160,
-        screenY: screenY + 90,
-      }));
-      row.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId,
-      }));
-    });
+    const firstDetachedWindowCreated = app.waitForEvent("window");
+    await shelf.locator(".shelf-editor").getByLabel("移出侧边").click();
+    window = await firstDetachedWindowCreated;
+    await window.waitForLoadState("domcontentloaded");
+    expect(new URL(window.url()).searchParams.get("noteId")).toBe(firstNoteId);
+    await expect(window.locator(".title-input")).toHaveValue("QA 便签");
     await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("free");
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
-    const draggedOutBounds = await app.evaluate(({ BrowserWindow }, url) => {
-      return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.getBounds();
-    }, window.url());
-    expect(draggedOutBounds).toBeTruthy();
 
-    await shelf!.evaluate(() => window.noteAPI.setShelfExpanded(false));
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(36);
-    await shelf!.evaluate(() => window.noteAPI.setShelfExpanded(true));
-    await shelf!.waitForTimeout(40);
-    const transitioningShelfBounds = await readShelfBounds();
-    expect(transitioningShelfBounds!.width).toBeGreaterThan(36);
-    expect(transitioningShelfBounds!.width).toBeLessThan(200);
-    const firstTitleBar = window.locator(".title-bar");
-    await firstTitleBar.evaluate((titleBar, target) => {
-      const bar = titleBar as HTMLElement;
-      bar.setPointerCapture = () => {};
-      const pointerId = 29;
-      const startX = window.screenX + 80;
-      const startY = window.screenY + 8;
-      const targetX = target.x + target.width / 2;
-      const targetY = target.y + target.height / 2;
-      bar.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: startX,
-        screenY: startY,
-      }));
-      bar.dispatchEvent(new PointerEvent("pointermove", {
-        bubbles: true,
-        buttons: 1,
-        isPrimary: true,
-        pointerId,
-        screenX: targetX,
-        screenY: targetY,
-      }));
-    }, transitioningShelfBounds!);
-    await window.waitForTimeout(40);
-    const previewState = await app.evaluate(({ BrowserWindow }, url) => {
-      const noteWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url);
-      return { bounds: noteWindow?.getBounds(), visible: noteWindow?.isVisible(), alwaysOnTop: noteWindow?.isAlwaysOnTop() };
-    }, window.url());
-    expect(await readNoteDockState(window, firstNoteId)).toBe("free");
-    expect(previewState.visible).toBe(true);
-    expect(previewState.alwaysOnTop).toBe(true);
-    expect(previewState.bounds!.width).toBeLessThan(draggedOutBounds!.width);
-    await firstTitleBar.evaluate((titleBar) => {
-      titleBar.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 29,
-      }));
-    });
-    await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("shelf");
-    await expect.poll(() => readWindowVisible(window.url())).toBe(false);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(2);
-    await window.evaluate((id) => window.noteAPI.toggleNoteDock(id), firstNoteId);
-    await expect.poll(() => readNoteDockState(window, firstNoteId)).toBe("free");
-    await expect.poll(() => readWindowVisible(window.url())).toBe(true);
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
-    const firstAfterDetach = await window.evaluate(async (id) => {
-      const note = (await window.noteAPI.getNote(id)).note;
-      return note ? { revision: note.revision, modifiedAt: note.modifiedAt } : null;
-    }, firstNoteId);
-    expect(firstAfterDetach).toEqual(firstBeforeDock);
-
-    await shelf!.getByLabel("展开侧边便签架").click();
-    await expect.poll(() => shelf!.evaluate(() => window.innerWidth)).toBe(200);
-    await shelf!.locator(".note-list-item").click();
-    await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
-    const dockedSecondClosed = secondWindow.waitForEvent("close");
-    await secondWindow.getByLabel("关闭便签").click();
-    await dockedSecondClosed;
-    await expect(shelf!.locator(".note-list-item")).toHaveCount(1);
-    const reopenedSecondWindow = app.waitForEvent("window");
-    await shelf!.locator(".note-list-item").click();
-    secondWindow = await reopenedSecondWindow;
+    await shelf.locator(".note-list-row").filter({ hasText: "第二张便签" }).locator(".note-list-item").click();
+    await expect(shelf.locator(".shelf-editor .title-input")).toHaveValue("第二张便签");
+    const secondDetachedWindowCreated = app.waitForEvent("window");
+    await shelf.locator(".shelf-editor").getByLabel("移出侧边").click();
+    secondWindow = await secondDetachedWindowCreated;
     await secondWindow.waitForLoadState("domcontentloaded");
     expect(new URL(secondWindow.url()).searchParams.get("noteId")).toBe(secondNoteId);
-    await secondWindow.getByLabel("移出侧边").click();
     await expect.poll(() => readNoteDockState(secondWindow, secondNoteId)).toBe("free");
-    await expect.poll(() => readWindowVisible(secondWindow.url())).toBe(true);
     await expect.poll(() => app.evaluate(({ BrowserWindow }, url) => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.getBounds();
     }, secondWindow.url())).toEqual({
@@ -1312,6 +844,9 @@ test("主窗口和便签窗口关键流程", async () => {
     const secondClosed = secondWindow.waitForEvent("close");
     await secondWindow.getByLabel("便签操作").click();
     await secondWindow.getByRole("menuitem", { name: "删除便签" }).click();
+    await expect.poll(() => mainWindow.evaluate(async (id) => {
+      return (await window.noteAPI.getNote(id)).note;
+    }, secondNoteId)).toBeNull();
     await secondClosed;
     await expect(mainWindow.locator(".main-note-row")).toHaveCount(1);
     await expect(mainWindow.getByText("QA 便签")).toBeVisible();

@@ -69,7 +69,7 @@ app.whenReady().then(async () => {
   shortcutManager.initialize();
   if (!process.argv.includes(LOGIN_HIDDEN_ARGUMENT)) windows.openMainWindow();
   for (const note of store.state.notes) {
-    if (store.getWindowState(note.id).open) windows.open(note);
+    if (store.getWindowState(note.id).open && store.getDockState(note.id) !== "shelf") windows.open(note);
   }
   windows.restoreDockedMode();
 
@@ -197,23 +197,25 @@ function registerIpc() {
   });
   ipcMain.on("window:resize-end", (event, id) => windows.endResize(validId(id), event.sender));
   ipcMain.handle("window:set-pinned", (_event, id, pinned) => windows.setPinned(validId(id), Boolean(pinned)));
-  ipcMain.handle("group:toggle-note-dock", (_event, id) => windows.toggleNoteDock(validId(id)));
+  ipcMain.handle("group:dock-note", (_event, id) => windows.dockNoteResult(validId(id)));
+  ipcMain.handle("group:undock-note", (_event, id) => windows.undockNoteResult(validId(id)));
   ipcMain.on("group:reveal", () => windows.revealGroup());
   ipcMain.on("group:hide", () => windows.scheduleHideGroup());
   ipcMain.on("group:cancel-hide", () => windows.cancelHideGroup());
   ipcMain.handle("notes:list", (_event, includeDrafts) => store.listSummaries(includeDrafts === true));
   ipcMain.handle("group:activate-note", (_event, id) => windows.activateDockedNote(validId(id)));
   ipcMain.handle("group:close-docked-note", (_event, id) => windows.closeDockedNote(validId(id)));
-  ipcMain.on("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
+  ipcMain.handle("shelf:set-expanded", (_event, expanded) => windows.setShelfExpanded(Boolean(expanded)));
   ipcMain.on("shelf:move-start", (event) => windows.beginShelfMove(event.sender));
   ipcMain.on("shelf:move", (event, deltaX, deltaY) => {
     if (validWindowDelta(deltaX) && validWindowDelta(deltaY)) windows.moveShelf(deltaX, deltaY, event.sender);
   });
   ipcMain.on("shelf:move-end", (event) => windows.endShelfMove(event.sender));
-  ipcMain.on("shelf:note-drag-start", (event, id, pointerX, pointerY, sourceBounds) => {
+  ipcMain.handle("shelf:note-drag-start", (event, id, pointerX, pointerY, sourceBounds) => {
     if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
-      windows.beginShelfNoteDrag(validId(id), pointerX, pointerY, validWindowBounds(sourceBounds), event.sender);
+      return windows.beginShelfNoteDrag(validId(id), pointerX, pointerY, validWindowBounds(sourceBounds), event.sender);
     }
+    return false;
   });
   ipcMain.on("shelf:note-drag", (event, id, pointerX, pointerY, dropBounds) => {
     if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
@@ -323,12 +325,17 @@ function executeShortcut(id, focusedWindow) {
     return;
   }
   if (id === "close-window") {
-    if (!focusedWindow || focusedWindow === windows.shelfWindow) return;
+    if (!focusedWindow) return;
+    if (focusedWindow === windows.shelfWindow) {
+      if (windows.activeDockedId) focusedWindow.webContents.send("app:command", "close-window");
+      return;
+    }
     if (focusedWindow === windows.mainWindow) focusedWindow.close();
     else focusedWindow.webContents.send("app:command", "close-window");
     return;
   }
-  if (!NOTE_COMMANDS.has(id) || !focusedWindow || focusedWindow === windows.mainWindow || focusedWindow === windows.shelfWindow) return;
+  if (!NOTE_COMMANDS.has(id) || !focusedWindow || focusedWindow === windows.mainWindow) return;
+  if (focusedWindow === windows.shelfWindow && !windows.activeDockedId) return;
   focusedWindow.webContents.send("app:command", id);
 }
 

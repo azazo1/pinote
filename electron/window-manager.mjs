@@ -5,6 +5,7 @@ import log from "electron-log/main.js";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
 import { isPointNearBounds, SHELF_DOCK_PROXIMITY } from "./windowing/shelf-proximity.mjs";
 import { snapBounds } from "./windowing/snap-bounds.mjs";
+import { shelfWorkspaceLayout } from "./windowing/shelf-workspace-bounds.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const COLLAPSED_HEIGHT = 22;
@@ -47,7 +48,7 @@ export class WindowManager {
     this.animations = new Map();
     this.animatingWindows = new Set();
     this.boundsSaveTimers = new Map();
-    this.workspaceRebindWindows = new Set();
+    this.shelfHostedNoteId = null;
     this.resizeSessions = new Map();
     this.moveSessions = new Map();
     this.shelfNoteDragSession = null;
@@ -74,11 +75,13 @@ export class WindowManager {
   }
 
   flushPendingNotes() {
-    return this.flushWindows([...this.windows.values()]);
+    const targets = [...this.windows.values()];
+    if (this.shelfHostedNoteId && this.shelfWindow && !this.shelfWindow.isDestroyed()) targets.push(this.shelfWindow);
+    return this.flushWindows(targets);
   }
 
   flushPendingNote(id) {
-    const window = this.windows.get(id);
+    const window = this.shelfHostedNoteId === id ? this.shelfWindow : this.windows.get(id);
     return this.flushWindows(window ? [window] : []);
   }
 
@@ -254,7 +257,6 @@ export class WindowManager {
     window.on("closed", () => {
       this.cancelAnimation(window);
       this.cancelPendingBounds(note.id);
-      this.workspaceRebindWindows.delete(window.id);
       this.resizeSessions.delete(note.id);
       this.moveSessions.delete(note.id);
       if (this.shelfNoteDragSession?.id === note.id) this.shelfNoteDragSession = null;
@@ -273,6 +275,12 @@ export class WindowManager {
     const note = this.store.getNote(id);
     if (!note) return null;
     this.store.updateWindow(id, { open: true });
+    if (this.store.getDockState(id) === "shelf") {
+      void this.activateDockedNote(id);
+      this.broadcastNoteList();
+      log.info("已打开侧边便签", { id });
+      return this.store.getRenderableNote(id);
+    }
     const existing = this.windows.get(id);
     const window = this.open(note);
     const activate = () => {
@@ -291,6 +299,7 @@ export class WindowManager {
   }
 
   closeNote(id) {
+    if (this.store.getDockState(id) === "shelf") return this.closeDockedNote(id);
     if (this.store.isDraft(id)) {
       this.remove(id);
       return true;
@@ -326,7 +335,8 @@ export class WindowManager {
     }
     if (mode === "shelf") {
       this.activeDockedId = null;
-      for (const id of dockedIds) this.windows.get(id)?.hide();
+      this.shelfHostedNoteId = null;
+      for (const id of dockedIds) this.destroyNoteWindow(id);
       this.ensureShelfWindow();
     } else {
       const firstId = dockedIds.find((id) => {
@@ -358,12 +368,18 @@ export class WindowManager {
 
   createDockedNote() {
     const note = this.store.createDraft();
-    const window = this.open(note, { initialFocus: "title" });
-    window.once("ready-to-show", () => this.activateDockedNote(note.id));
-    this.dockNote(note.id, { persist: false });
-    if (this.getDockMode() === "shelf" && this.shelfWindow) {
+    if (this.getDockMode() === "shelf") {
+      this.store.updateWindow(note.id, { open: true });
+      this.store.setDockState(note.id, "shelf");
+      this.ensureShelfWindow();
       this.draftFocusOwners.set(note.id, this.shelfWindow);
+      void this.activateDockedNote(note.id, { initialFocus: "title" });
+    } else {
+      const window = this.open(note, { initialFocus: "title" });
+      window.once("ready-to-show", () => this.activateDockedNote(note.id));
+      this.dockNote(note.id, { persist: false });
     }
+    this.broadcastNoteList();
     this.cancelHideGroup();
     return this.store.getRenderableNote(note.id);
   }
@@ -371,6 +387,17 @@ export class WindowManager {
   toggleCollapse(id) {
     const state = this.store.getWindowState(id);
     const window = this.windows.get(id);
+    if (this.store.getDockState(id) === "shelf") {
+      const collapsed = !state.collapsed;
+      this.store.updateWindow(id, { collapsed });
+      if (this.shelfWindow && !this.shelfWindow.isDestroyed()) {
+        this.shelfWindow.webContents.send("note:collapsed", collapsed);
+        if (this.activeDockedId === id) void this.setShelfExpanded(true);
+      }
+      this.broadcastNoteList();
+      log.info(collapsed ? "已收起便签" : "已展开便签", { id });
+      return;
+    }
     if (!window) return;
     const bounds = window.getBounds();
     const collapsed = !state.collapsed;
@@ -517,7 +544,7 @@ export class WindowManager {
   shelfNoteTransitionBounds(shelf, requestedBounds = null, dropIndex = null) {
     if (requestedBounds) return requestedBounds;
     const display = screen.getDisplayMatching(shelf.getBounds());
-    const shelfBounds = this.shelfExpanded ? this.shelfBounds(display, true) : shelf.getBounds();
+    const shelfBounds = this.shelfExpanded ? this.shelfListBounds(display, true) : shelf.getBounds();
     const expandedLike = this.shelfExpanded || shelfBounds.width > SHELF_COLLAPSED_SIZE + 16;
     if (expandedLike) {
       const dockedCount = this.store.listDockedNotes("shelf").length;
@@ -563,8 +590,8 @@ export class WindowManager {
     this.showNoteWindow(window, { inactive: true });
     window.moveTop();
     this.animateBounds(window, target, SHELF_NOTE_TRANSITION_MS, () => {
-      if (!window.isDestroyed()) window.hide();
       this.finishNoteTransition(id, window);
+      this.destroyNoteWindow(id);
       if (expandAfterDrop) this.scheduleShelfExpansionAfterDrop();
       else this.scheduleHideGroup();
     });
@@ -680,8 +707,7 @@ export class WindowManager {
 
   setPinned(id, pinned) {
     const window = this.windows.get(id);
-    if (!window) return;
-    this.applyPinnedLevel(window, Boolean(pinned));
+    if (window && !window.isDestroyed()) this.applyPinnedLevel(window, Boolean(pinned));
     this.store.updateWindow(id, { pinned: Boolean(pinned) });
     this.broadcastNoteList();
     log.info(pinned ? "便签已置顶" : "便签已取消置顶", { id });
@@ -690,7 +716,13 @@ export class WindowManager {
   setNoteArchived(id, archived) {
     const note = this.store.getNote(id);
     if (!note) return null;
-    if (archived && this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: true });
+    if (archived && this.store.getDockState(id) === "shelf") {
+      this.store.updateWindow(id, { dockState: "free", open: false });
+      if (this.activeDockedId === id) this.activeDockedId = null;
+      if (this.shelfHostedNoteId === id) this.shelfHostedNoteId = null;
+    } else if (archived && this.store.isDocked(id)) {
+      this.detachDockedNote(id, { restoreBounds: true });
+    }
     const updated = this.store.setArchived(id, archived);
     this.reconcileDockSurface();
     this.broadcastNoteList();
@@ -714,43 +746,47 @@ export class WindowManager {
     window?.destroy();
     this.windows.delete(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
+    if (this.shelfHostedNoteId === id) this.shelfHostedNoteId = null;
     this.reconcileDockSurface();
     this.broadcastNoteList();
     this.sendGroupState();
   }
 
-  toggleNoteDock(id) {
+  dockNoteResult(id) {
+    const note = this.store.getNote(id);
+    if (!note || note.archivedAt !== null) return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
+    if (!this.store.isDocked(id)) this.dockNote(id, { animate: this.getDockMode() === "shelf" });
+    return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
+  }
+
+  undockNoteResult(id) {
     const note = this.store.getNote(id);
     if (!note || note.archivedAt !== null) return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
     if (this.store.isDocked(id)) this.detachDockedNote(id, { restoreBounds: true });
-    else this.dockNote(id);
     return { note: this.store.getRenderableNote(id), group: this.getGroupState() };
   }
 
   dockNote(id, { animate = false, persist = true } = {}) {
     const note = this.store.getNote(id);
     if (!note || note.archivedAt !== null || this.store.isDocked(id)) return false;
-    let window = this.windows.get(id);
-    if (!window || window.isDestroyed()) {
-      this.store.updateWindow(id, { open: true });
-      window = this.open(note);
-    }
+    const window = this.windows.get(id);
     if (persist) this.persistBounds(id);
     const mode = this.getDockMode();
     this.store.setDockState(id, mode);
     this.cancelHideGroup();
     if (mode === "shelf") {
       const shelf = this.ensureShelfWindow();
-      if (animate && shelf) {
+      if (animate && shelf && window && !window.isDestroyed()) {
         this.animateNoteIntoShelf(id, window, shelf, !this.shelfExpanded);
+      } else {
+        this.destroyNoteWindow(id);
       }
-      else window.hide();
     } else {
       if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
         this.windows.get(this.activeDockedId)?.hide();
       }
       this.activeDockedId = id;
-      this.showNoteWindow(window, { focus: true });
+      if (window && !window.isDestroyed()) this.showNoteWindow(window, { focus: true });
     }
     this.broadcastNoteList();
     this.sendGroupState();
@@ -762,12 +798,17 @@ export class WindowManager {
   detachDockedNote(id, { restoreBounds = true } = {}) {
     const previousMode = this.store.getDockState(id);
     if (previousMode !== "shelf" && previousMode !== "inline") return false;
-    const window = this.windows.get(id);
+    let window = this.windows.get(id);
     if (window && !window.isDestroyed()) this.finishNoteTransition(id, window);
     if (this.shelfNoteDragSession?.id === id) this.shelfNoteDragSession = null;
     this.store.setDockState(id, "free");
     if (this.activeDockedId === id) this.activeDockedId = null;
-    if (restoreBounds) this.restoreSavedPosition(id, true);
+    if (this.shelfHostedNoteId === id) this.shelfHostedNoteId = null;
+    if (!window || window.isDestroyed()) {
+      const note = this.store.getNote(id);
+      if (note) window = this.open(note);
+    }
+    if (restoreBounds && window && !window.isDestroyed()) this.restoreSavedPosition(id, true);
     else if (window && !window.isDestroyed()) {
       this.showNoteWindow(window, { inactive: true });
       window.moveTop();
@@ -790,6 +831,10 @@ export class WindowManager {
     }
     if (mode === "shelf") {
       if (!dockedIds.includes(this.activeDockedId)) this.activeDockedId = null;
+      if (!dockedIds.includes(this.shelfHostedNoteId)) this.shelfHostedNoteId = null;
+      for (const id of dockedIds) {
+        if (this.shelfNoteDragSession?.id !== id) this.destroyNoteWindow(id);
+      }
       this.ensureShelfWindow();
       return;
     }
@@ -814,6 +859,8 @@ export class WindowManager {
     this.cancelShelfHoverExpansion();
     this.cancelShelfDropExpansion();
     this.shelfExpanded = false;
+    this.activeDockedId = null;
+    this.shelfHostedNoteId = null;
     this.shelfMoveSession = null;
     const shelf = this.shelfWindow;
     this.shelfWindow = null;
@@ -844,7 +891,10 @@ export class WindowManager {
       backgroundColor: "#00000000",
       webPreferences: rendererPreferences(),
     };
-    if (process.platform === "darwin") options.type = "panel";
+    if (process.platform === "darwin") {
+      options.type = "panel";
+      options.acceptFirstMouse = true;
+    }
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
     if (process.platform === "darwin") {
@@ -853,6 +903,14 @@ export class WindowManager {
     this.loadRenderer(shelf, {
       view: "shelf",
       edge: this.store.getShelfPlacement(display.id).edge,
+    });
+    shelf.webContents.on("did-finish-load", () => {
+      if (this.shelfWindow !== shelf || shelf.isDestroyed()) return;
+      shelf.webContents.send("notes:list", this.store.listSummaries(true));
+      shelf.webContents.send("group:state", this.getGroupState());
+      shelf.webContents.send("shelf:expanded", this.shelfExpanded);
+      shelf.webContents.send("shelf:placement", this.store.getShelfPlacement(this.findShelfDisplay().id).edge);
+      if (this.activeDockedId) this.sendShelfWorkspace();
     });
     shelf.once("ready-to-show", () => {
       if (this.shelfWindow === shelf && !shelf.isDestroyed() && this.store.listDockedNotes("shelf").length > 0) {
@@ -867,13 +925,18 @@ export class WindowManager {
     return shelf;
   }
 
-  setShelfExpanded(expanded) {
+  async setShelfExpanded(expanded) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
     if (!expanded && (this.shelfNoteDragSession || this.moveSessions.size > 0)) return;
     this.cancelHideGroup();
     if (expanded) this.cancelShelfDropExpansion();
     const shelf = this.ensureShelfWindow();
     if (!shelf) return;
+    if (!expanded && this.activeDockedId) {
+      await this.flushPendingNote(this.activeDockedId);
+      this.activeDockedId = null;
+      this.sendGroupState();
+    }
     const display = this.findShelfDisplay();
     const target = this.shelfBounds(display, expanded);
     this.shelfExpanded = expanded;
@@ -881,6 +944,7 @@ export class WindowManager {
     else this.armShelfHoverExpansion();
     shelf.webContents.send("shelf:expanded", expanded);
     shelf.webContents.send("shelf:placement", this.store.getShelfPlacement(display.id).edge);
+    if (expanded && this.activeDockedId) this.sendShelfWorkspace(display);
     this.animateBounds(shelf, target, SHELF_ANIMATION_MS);
   }
 
@@ -957,7 +1021,7 @@ export class WindowManager {
     return true;
   }
 
-  beginShelfNoteDrag(id, pointerX, pointerY, sourceBounds, sender) {
+  async beginShelfNoteDrag(id, pointerX, pointerY, sourceBounds, sender) {
     const shelf = this.shelfWindow;
     if (
       this.getDockMode() !== "shelf"
@@ -970,41 +1034,53 @@ export class WindowManager {
 
     const note = this.store.getNote(id);
     if (!note) return false;
+    const session = {
+      id,
+      senderId: sender.id,
+      pointerX,
+      pointerY,
+      preparing: true,
+      revealing: true,
+      releasePending: false,
+      overShelf: true,
+      dropBounds: null,
+    };
+    this.shelfNoteDragSession = session;
+    if (this.shelfHostedNoteId === id) {
+      const flushed = await this.flushPendingNote(id);
+      if (!flushed || this.shelfNoteDragSession !== session) {
+        if (this.shelfNoteDragSession === session) this.shelfNoteDragSession = null;
+        return false;
+      }
+    }
     let window = this.windows.get(id);
     if (!window || window.isDestroyed()) {
       this.store.updateWindow(id, { open: true });
       window = this.open(note);
+      await waitForWindowReady(window);
     }
+    if (this.shelfNoteDragSession !== session || window.isDestroyed()) return false;
     this.cancelHideGroup();
     this.cancelAnimation(window);
-    if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
-      this.windows.get(this.activeDockedId)?.hide();
-    }
-    this.activeDockedId = id;
     window.setFocusable(false);
     const state = this.store.getWindowState(id);
     const width = state.collapsed ? COLLAPSED_WIDTH : state.bounds.width;
     const height = state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height;
     const offsetX = Math.min(80, Math.round(width / 3));
     const offsetY = Math.min(11, Math.round(height / 2));
-    this.shelfNoteDragSession = {
-      id,
-      senderId: sender.id,
+    Object.assign(session, {
       offsetX,
       offsetY,
-      pointerX,
-      pointerY,
+      preparing: false,
       revealing: true,
-      releasePending: false,
       overShelf: this.shouldDockAtShelf({ x: pointerX, y: pointerY }),
-      dropBounds: null,
-    };
+    });
     this.beginNoteTransition(id, window);
     const start = sourceBounds ?? this.shelfNoteTransitionBounds(shelf);
     window.setBounds(start, false);
     this.showNoteWindow(window, { inactive: true });
     window.moveTop();
-    this.animateShelfNoteReveal(window, this.shelfNoteDragSession, start);
+    this.animateShelfNoteReveal(window, session, start);
     log.info("已从侧边架开始拖动便签", { id });
     return true;
   }
@@ -1077,14 +1153,12 @@ export class WindowManager {
       const window = this.windows.get(session.id);
       const shelf = this.shelfWindow;
       if (!window || window.isDestroyed() || !shelf || shelf.isDestroyed()) return false;
-      this.setShelfExpanded(true);
+      void this.setShelfExpanded(true);
       this.beginNoteTransition(session.id, window);
       const target = this.shelfNoteTransitionBounds(shelf, session.dropBounds);
       this.animateBounds(window, target, SHELF_NOTE_TRANSITION_MS, () => {
-        if (!window.isDestroyed()) window.hide();
-        if (!window.isDestroyed()) window.setFocusable(true);
         this.finishNoteTransition(session.id, window);
-        if (this.activeDockedId === session.id) this.activeDockedId = null;
+        this.destroyNoteWindow(session.id);
         this.scheduleHideGroup();
       });
       log.info("侧边架便签已拖回收纳区域", { id: session.id });
@@ -1098,8 +1172,7 @@ export class WindowManager {
     const window = this.windows.get(session.id);
     if (window && !window.isDestroyed()) this.finishNoteTransition(session.id, window);
     if (!detach) {
-      window?.hide();
-      if (window && !window.isDestroyed()) window.setFocusable(true);
+      this.destroyNoteWindow(session.id);
       return true;
     }
     const detached = this.detachDockedNote(session.id, { restoreBounds: false });
@@ -1142,9 +1215,7 @@ export class WindowManager {
     session.displayId = display.id;
     session.bounds = target;
     shelf.setBounds(target, false);
-    if (this.shelfExpanded && this.activeDockedId) {
-      this.positionDockedNote(this.activeDockedId, display, target, false);
-    }
+    if (this.shelfExpanded && this.activeDockedId) this.sendShelfWorkspace(display);
     shelf.webContents.send("shelf:placement", "free");
     return true;
   }
@@ -1185,9 +1256,7 @@ export class WindowManager {
     shelf.webContents.send("shelf:placement", edge);
     const target = this.shelfBounds(display, this.shelfExpanded);
     this.animateBounds(shelf, target, SHELF_ANIMATION_MS);
-    if (this.shelfExpanded && this.activeDockedId) {
-      this.positionDockedNote(this.activeDockedId, display, target, false);
-    }
+    if (this.shelfExpanded && this.activeDockedId) this.sendShelfWorkspace(display);
     if (String(session.startDisplayId) !== String(display.id)) {
       log.info("侧边架已移动到显示器", { displayId: display.id });
     }
@@ -1219,30 +1288,20 @@ export class WindowManager {
   }
 
   handleApplicationBlur() {
-    for (const [id, window] of this.windows) {
-      if (this.store.isDocked(id) && !window.isDestroyed()) this.workspaceRebindWindows.add(window.id);
-    }
     this.scheduleAppBlurHide();
   }
 
   scheduleAppBlurHide(blurredWindow = null) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
-    const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
-      ? this.windows.get(this.activeDockedId)
-      : null;
-    if (blurredWindow && blurredWindow !== activeWindow && blurredWindow !== this.shelfWindow) return;
+    if (blurredWindow && blurredWindow !== this.shelfWindow) return;
     this.cancelAppBlurHide();
     this.appBlurTimer = setTimeout(() => {
       this.appBlurTimer = null;
       if (this.isAppActive() || BrowserWindow.getFocusedWindow()) return;
       if (this.shelfNoteDragSession || this.moveSessions.size > 0) return;
-      const currentActiveWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
-        ? this.windows.get(this.activeDockedId)
-        : null;
-      const activeWindowVisible = currentActiveWindow && !currentActiveWindow.isDestroyed() && currentActiveWindow.isVisible();
-      if (!this.shelfExpanded && !activeWindowVisible) return;
+      if (!this.shelfExpanded) return;
       this.cancelHideGroup();
-      this.hideGroupNow(currentActiveWindow);
+      void this.hideGroupNow();
       log.info("切换到其他应用后已收回侧边栏");
     }, SHELF_HIDE_DELAY_MS);
   }
@@ -1274,114 +1333,90 @@ export class WindowManager {
         return;
       }
       const cursor = screen.getCursorScreenPoint();
-      const activeWindow = this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
-        ? this.windows.get(this.activeDockedId)
-        : null;
-      const visibleWindows = [this.shelfWindow, activeWindow].filter(Boolean);
+      const visibleWindows = [this.shelfWindow].filter(Boolean);
       const hovered = visibleWindows.some((window) => !window.isDestroyed() && contains(window.getBounds(), cursor));
       if (hovered) return;
       if (this.shelfNoteDragSession || this.moveSessions.size > 0) {
         this.scheduleHideGroup();
         return;
       }
-      this.hideGroupNow(activeWindow);
+      void this.hideGroupNow();
     }, SHELF_HIDE_DELAY_MS);
   }
 
-  hideGroupNow(activeWindow = null) {
-    const window = activeWindow ?? (
-      this.activeDockedId && this.store.getDockState(this.activeDockedId) === "shelf"
-        ? this.windows.get(this.activeDockedId)
-        : null
-    );
-    if (window && !window.isDestroyed()) window.hide();
-    this.activeDockedId = null;
-    this.setShelfExpanded(false);
+  async hideGroupNow() {
+    await this.setShelfExpanded(false);
   }
 
-  activateDockedNote(id) {
+  async activateDockedNote(id, { initialFocus = "editor" } = {}) {
     const mode = this.getDockMode();
     if (this.store.getDockState(id) !== mode) return;
     this.draftFocusOwners.delete(id);
     this.cancelHideGroup();
-    let window = this.windows.get(id);
-    if (!window || window.isDestroyed()) {
-      const note = this.store.getNote(id);
-      if (!note) return;
-      this.store.updateWindow(id, { open: true });
-      window = this.open(note);
-      window.once("ready-to-show", () => this.activateDockedNote(id));
-      this.broadcastNoteList();
-      return this.store.getRenderableNote(id);
-    }
-    if (this.transitioningNotes.has(id)) this.finishNoteTransition(id, window);
-    if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
-      this.windows.get(this.activeDockedId)?.hide();
-    }
-    this.activeDockedId = id;
     if (mode === "inline") {
+      let window = this.windows.get(id);
+      if (!window || window.isDestroyed()) {
+        const note = this.store.getNote(id);
+        if (!note) return;
+        this.store.updateWindow(id, { open: true });
+        window = this.open(note);
+        window.once("ready-to-show", () => void this.activateDockedNote(id));
+        this.broadcastNoteList();
+        return this.store.getRenderableNote(id);
+      }
+      if (this.transitioningNotes.has(id)) this.finishNoteTransition(id, window);
+      if (this.activeDockedId && this.activeDockedId !== id && this.store.isDocked(this.activeDockedId)) {
+        this.windows.get(this.activeDockedId)?.hide();
+      }
+      this.activeDockedId = id;
       this.showNoteWindow(window, { focus: true });
       this.sendGroupState();
-      return;
+      return this.store.getRenderableNote(id);
     }
 
-    this.setShelfExpanded(true);
+    if (this.shelfHostedNoteId && this.shelfHostedNoteId !== id) {
+      const flushed = await this.flushPendingNote(this.shelfHostedNoteId);
+      if (!flushed) {
+        log.warn("切换侧边便签前保存失败", { id: this.shelfHostedNoteId, nextId: id });
+        return null;
+      }
+    }
+    this.destroyNoteWindow(id);
+    this.activeDockedId = id;
+    this.shelfHostedNoteId = id;
+    this.sendGroupState();
+    await this.setShelfExpanded(true);
     const shelf = this.ensureShelfWindow();
-    if (!shelf) return;
-    const display = screen.getDisplayMatching(shelf.getBounds());
-    return this.positionDockedNote(id, display, this.shelfBounds(display, true), true);
+    if (!shelf) return null;
+    shelf.show();
+    shelf.focus();
+    setImmediate(() => {
+      if (!shelf.isDestroyed() && this.activeDockedId === id) {
+        shelf.webContents.send("app:command", initialFocus === "title" ? "focus-title" : "focus-editor");
+      }
+    });
+    return this.store.getRenderableNote(id);
   }
 
-  closeDockedNote(id) {
+  async closeDockedNote(id) {
     if (this.store.getDockState(id) !== "shelf") return false;
+    if (this.shelfHostedNoteId === id) await this.flushPendingNote(id);
     if (this.store.isDraft(id)) {
       this.remove(id);
       return true;
     }
-    const window = this.windows.get(id);
     this.cancelPendingBounds(id);
     this.moveSessions.delete(id);
     if (this.shelfNoteDragSession?.id === id) this.finishShelfNoteDrag(false);
     this.store.updateWindow(id, { dockState: "free", open: false });
     if (this.activeDockedId === id) this.activeDockedId = null;
-    this.windows.delete(id);
-    window?.hide();
-    if (window) {
-      setImmediate(() => {
-        if (!window.isDestroyed()) window.close();
-      });
-    }
+    if (this.shelfHostedNoteId === id) this.shelfHostedNoteId = null;
+    this.destroyNoteWindow(id);
     this.reconcileDockSurface();
     this.broadcastNoteList();
     this.sendGroupState();
     log.info("已关闭侧边栏便签", { id });
     return true;
-  }
-
-  positionDockedNote(id, display, shelfTarget, focus) {
-    if (this.store.getDockState(id) !== "shelf") return null;
-    const window = this.windows.get(id);
-    if (!window || window.isDestroyed()) return null;
-    const state = this.store.getWindowState(id);
-    const height = state.collapsed ? COLLAPSED_HEIGHT : state.bounds.height;
-    const leftSpace = shelfTarget.x - display.workArea.x;
-    const rightSpace = display.workArea.x + display.workArea.width - shelfTarget.x - shelfTarget.width;
-    const noteX = leftSpace >= state.bounds.width + 10 || leftSpace >= rightSpace
-      ? shelfTarget.x - state.bounds.width - 10
-      : shelfTarget.x + shelfTarget.width + 10;
-    const bounds = this.clampBounds({
-      x: noteX,
-      y: Math.max(display.workArea.y + 12, screen.getCursorScreenPoint().y - 32),
-      width: state.bounds.width,
-      height,
-    }, display.workArea);
-    window.setBounds(bounds, false);
-    if (focus) {
-      this.showNoteWindow(window, { focus: true });
-    } else if (!window.isVisible()) {
-      this.showNoteWindow(window, { inactive: true });
-    }
-    return this.store.getRenderableNote(id);
   }
 
   reconcileRemoteState() {
@@ -1395,10 +1430,23 @@ export class WindowManager {
     }
     for (const note of this.store.state.notes) {
       if (note.archivedAt !== null && this.store.getDockState(note.id) !== "free") {
-        this.detachDockedNote(note.id, { restoreBounds: true });
+        if (this.store.getDockState(note.id) === "shelf") {
+          this.store.updateWindow(note.id, { dockState: "free", open: false });
+          if (this.activeDockedId === note.id) this.activeDockedId = null;
+          if (this.shelfHostedNoteId === note.id) this.shelfHostedNoteId = null;
+        } else {
+          this.detachDockedNote(note.id, { restoreBounds: true });
+        }
       }
       const state = this.store.getWindowState(note.id);
       if (!state.open) continue;
+      if (this.store.getDockState(note.id) === "shelf") {
+        this.destroyNoteWindow(note.id);
+        if (this.shelfHostedNoteId === note.id && this.shelfWindow && !this.shelfWindow.isDestroyed()) {
+          this.shelfWindow.webContents.send("note:remote", this.store.getRenderableNote(note.id));
+        }
+        continue;
+      }
       const window = this.windows.get(note.id);
       if (!window || window.isDestroyed()) {
         this.open(note);
@@ -1438,19 +1486,22 @@ export class WindowManager {
 
   showNoteWindow(window, { focus = false, inactive = false } = {}) {
     if (!window || window.isDestroyed()) return false;
-    if (process.platform === "darwin" && !window.isVisible()) {
-      const needsWorkspaceRebind = this.workspaceRebindWindows.delete(window.id);
-      if (needsWorkspaceRebind && window.isVisibleOnAllWorkspaces()) {
-        window.setVisibleOnAllWorkspaces(false, MACOS_WORKSPACE_OPTIONS);
-      }
-      if (needsWorkspaceRebind || !window.isVisibleOnAllWorkspaces()) {
-        window.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
-      }
-    }
     if (inactive) window.showInactive();
     else window.show();
     if (focus) window.focus();
     return true;
+  }
+
+  destroyNoteWindow(id) {
+    const window = this.windows.get(id);
+    if (!window || window.isDestroyed()) {
+      this.windows.delete(id);
+      return;
+    }
+    this.cancelAnimation(window);
+    this.cancelPendingBounds(id);
+    this.windows.delete(id);
+    window.destroy();
   }
 
   constrainAllWindows() {
@@ -1558,6 +1609,12 @@ export class WindowManager {
   }
 
   shelfBounds(display, expanded) {
+    const listBounds = this.shelfListBounds(display, expanded);
+    if (!expanded || !this.activeDockedId || this.store.getDockState(this.activeDockedId) !== "shelf") return listBounds;
+    return this.shelfWorkspaceLayout(display, listBounds).bounds;
+  }
+
+  shelfListBounds(display, expanded) {
     const area = display.workArea;
     const width = Math.min(expanded ? SHELF_EXPANDED_WIDTH : SHELF_COLLAPSED_SIZE, area.width);
     const desiredHeight = expanded ? this.shelfExpandedHeight(area) : SHELF_COLLAPSED_SIZE;
@@ -1575,6 +1632,24 @@ export class WindowManager {
       width,
       height,
     };
+  }
+
+  shelfWorkspaceLayout(display, listBounds = this.shelfListBounds(display, true)) {
+    const state = this.store.getWindowState(this.activeDockedId);
+    const placement = this.store.getShelfPlacement(display.id);
+    return shelfWorkspaceLayout({
+      area: display.workArea,
+      listBounds,
+      edge: placement.edge,
+      noteBounds: state.bounds,
+      collapsed: state.collapsed,
+    });
+  }
+
+  sendShelfWorkspace(display = this.findShelfDisplay()) {
+    const shelf = this.shelfWindow;
+    if (!shelf || shelf.isDestroyed() || !this.activeDockedId) return;
+    shelf.webContents.send("shelf:workspace", this.shelfWorkspaceLayout(display).metrics);
   }
 
   clampBounds(bounds, area) {
@@ -1647,6 +1722,11 @@ function rendererPreferences() {
     nodeIntegration: false,
     sandbox: true,
   };
+}
+
+function waitForWindowReady(window) {
+  if (window.isDestroyed() || !window.webContents.isLoadingMainFrame()) return Promise.resolve();
+  return new Promise((resolve) => window.webContents.once("did-finish-load", resolve));
 }
 
 function isWaylandSession() {

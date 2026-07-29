@@ -50,6 +50,12 @@ export interface GroupState {
   dockedIds: string[];
 }
 
+export interface ShelfWorkspaceMetrics {
+  editorSide: "left" | "right";
+  editorWidth: number;
+  editorHeight: number;
+}
+
 export interface DockToggleResult {
   note: Note | null;
   group: GroupState;
@@ -146,18 +152,19 @@ export interface NoteAPI {
   resizeWindow: (id: string, edge: NoteResizeEdge, size: WindowSize) => void;
   endWindowResize: (id: string) => void;
   setPinned: (id: string, pinned: boolean) => Promise<void>;
-  toggleNoteDock: (id: string) => Promise<DockToggleResult>;
+  dockNote: (id: string) => Promise<DockToggleResult>;
+  undockNote: (id: string) => Promise<DockToggleResult>;
   revealGroup: () => void;
   hideGroup: () => void;
   cancelGroupHide: () => void;
   listNotes: (includeDrafts?: boolean) => Promise<NoteSummary[]>;
-  activateDockedNote: (id: string) => Promise<void>;
+  activateDockedNote: (id: string) => Promise<Note | null | undefined>;
   closeDockedNote: (id: string) => Promise<boolean>;
-  setShelfExpanded: (expanded: boolean) => void;
+  setShelfExpanded: (expanded: boolean) => Promise<void>;
   beginShelfMove: () => void;
   moveShelf: (deltaX: number, deltaY: number) => void;
   endShelfMove: () => void;
-  beginShelfNoteDrag: (id: string, pointerX: number, pointerY: number, sourceBounds: WindowBounds) => void;
+  beginShelfNoteDrag: (id: string, pointerX: number, pointerY: number, sourceBounds: WindowBounds) => Promise<boolean>;
   moveShelfNoteDrag: (id: string, pointerX: number, pointerY: number, dropBounds: WindowBounds | null) => void;
   endShelfNoteDrag: (id: string) => void;
   getSyncSettings: () => Promise<SyncSettings>;
@@ -185,6 +192,7 @@ export interface NoteAPI {
   onNoteList: (callback: (notes: NoteSummary[]) => void) => () => void;
   onShelfExpanded: (callback: (expanded: boolean) => void) => () => void;
   onShelfPlacement: (callback: (edge: ShelfPlacementEdge) => void) => () => void;
+  onShelfWorkspace: (callback: (metrics: ShelfWorkspaceMetrics) => void) => () => void;
 }
 
 export interface SyncSettings {

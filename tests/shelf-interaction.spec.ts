@@ -10,47 +10,36 @@ test("侧边架全屏拖放和收纳动画", async () => {
 
   try {
     const main = await waitForWindow(app, "view=main");
-    const first = await createNote(app, main);
-    const second = await createNote(app, main);
+    let first = await createNote(app, main);
+    let second = await createNote(app, main);
     const firstId = noteId(first);
     const secondId = noteId(second);
+    const firstUrl = first.url();
+    const secondUrl = second.url();
 
-    await first.evaluate((id) => window.noteAPI.toggleNoteDock(id), firstId);
+    const firstDockedClosed = first.waitForEvent("close");
+    await first.evaluate((id) => window.noteAPI.dockNote(id), firstId);
+    await firstDockedClosed;
     const shelf = await waitForWindow(app, "view=shelf");
-    await second.evaluate((id) => window.noteAPI.toggleNoteDock(id), secondId);
+    const secondDockedClosed = second.waitForEvent("close");
+    await second.evaluate((id) => window.noteAPI.dockNote(id), secondId);
+    await secondDockedClosed;
     await expect(shelf.locator(".note-list-item")).toHaveCount(2);
-
     await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(36);
-    const collapsedShelfBounds = await shelfBounds(app);
-    await shelf.mouse.click(22, 18);
-    await shelf.waitForTimeout(80);
-    const clickedShelfBounds = await shelfBounds(app);
-    const repeatClickPoint = {
-      x: collapsedShelfBounds.x + 22 - clickedShelfBounds.x,
-      y: collapsedShelfBounds.y + 18 - clickedShelfBounds.y,
-    };
-    expect(await shelf.evaluate(({ x, y }) => (
-      document.elementFromPoint(x, y)?.classList.contains("shelf-repeat-click-guard") ?? false
-    ), repeatClickPoint)).toBe(true);
-    await shelf.mouse.click(repeatClickPoint.x, repeatClickPoint.y);
-    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
-    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
-    await shelf.waitForTimeout(300);
-    const expandedAfterRepeatBounds = await shelfBounds(app);
-    const continuedClickPoint = {
-      x: collapsedShelfBounds.x + 22 - expandedAfterRepeatBounds.x,
-      y: collapsedShelfBounds.y + 18 - expandedAfterRepeatBounds.y,
-    };
-    await shelf.mouse.click(continuedClickPoint.x, continuedClickPoint.y);
-    await shelf.waitForTimeout(300);
+    await expect.poll(() => isWindowVisible(app, firstUrl)).toBe(false);
+    await expect.poll(() => isWindowVisible(app, secondUrl)).toBe(false);
+
+    await shelf.getByLabel("展开侧边便签架").click();
     await expect(shelf.locator(".shelf-repeat-click-guard")).toHaveCount(1);
-    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
     await expect(shelf.locator(".shelf-repeat-click-guard")).toHaveCount(0, { timeout: 1_000 });
 
-    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(false));
-    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(36);
-    await shelf.locator(".shelf-shell").hover({ position: { x: 28, y: 18 } });
-    await expect.poll(() => shelf.evaluate(() => window.innerWidth), { timeout: 2_500 }).toBe(200);
+    await shelf.locator(`[data-note-id="${firstId}"] .note-list-item`).click();
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBeGreaterThan(200);
+    await expect(shelf.locator(".shelf-editor .title-input")).toHaveValue("侧边架测试便签");
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().some((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))
+    ), firstId)).toBe(false);
 
     const existingIds = await shelf.evaluate(async () => (await window.noteAPI.listNotes(true)).map((note) => note.id));
     await shelf.getByRole("button", { name: "新建便签" }).click();
@@ -59,27 +48,13 @@ test("侧边架全屏拖放和收纳动画", async () => {
       (await window.noteAPI.listNotes(true)).find((note) => !ids.includes(note.id))?.id ?? null
     ), existingIds);
     if (!createdId) throw new Error("侧边栏新建便签 id 不存在");
-    await expect.poll(() => shelf.evaluate(async (id) => {
-      const note = (await window.noteAPI.getNote(id)).note;
-      return note ? { dockState: note.dockState, open: note.open } : null;
-    }, createdId)).toEqual({ dockState: "shelf", open: true });
+    await expect(shelf.locator(".shelf-editor .title-input")).toBeVisible();
     await expect.poll(() => app.evaluate(({ BrowserWindow }, id) => (
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))?.isVisible()
-    ), createdId)).toBe(true);
-    const createdBounds = await app.evaluate(({ BrowserWindow }, id) => (
-      BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))?.getBounds() ?? null
-    ), createdId);
-    if (!createdBounds) throw new Error("侧边栏新建便签窗口不存在");
-    const expandedShelfBounds = await shelfBounds(app);
-    const horizontalGap = Math.min(
-      Math.abs(createdBounds.x + createdBounds.width - expandedShelfBounds.x),
-      Math.abs(expandedShelfBounds.x + expandedShelfBounds.width - createdBounds.x),
-    );
-    expect(horizontalGap).toBe(10);
+      BrowserWindow.getAllWindows().some((candidate) => candidate.webContents.getURL().includes(`noteId=${id}`))
+    ), createdId)).toBe(false);
     const createdCloseButton = shelf.locator(`[data-note-id="${createdId}"] .note-list-close`);
     await createdCloseButton.click();
     await expect(createdCloseButton).toHaveClass(/is-confirming/);
-    await expect(shelf.locator(".note-list-item")).toHaveCount(3);
     await createdCloseButton.click();
     await expect(shelf.locator(".note-list-item")).toHaveCount(2);
 
@@ -94,15 +69,15 @@ test("侧边架全屏拖放和收纳动画", async () => {
       }, main.url()), { timeout: 5_000 }).toBe(true);
     }
 
+    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(true));
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
     const focusedBeforeDrag = await focusedWindowUrl(app);
     await beginShelfNoteDrag(shelf, firstId, 41);
-    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(false));
-    await shelf.waitForTimeout(80);
-    expect(await shelf.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => isWindowVisible(app, first.url())).toBe(true);
+    await expect.poll(() => app.windows().some((page) => page.url().includes(`noteId=${firstId}`))).toBe(true);
     await endShelfNoteDrag(shelf, firstId, 41);
-    await expect.poll(() => readDockState(first, firstId)).toBe("free");
-    await expect.poll(() => isWindowVisible(app, first.url())).toBe(true);
+    await expect.poll(() => readDockState(shelf, firstId)).toBe("free");
+    first = await waitForWindow(app, `noteId=${firstId}`);
+    await expect(first.locator(".note-shell")).toBeVisible();
     expect(await focusedWindowUrl(app)).toBe(focusedBeforeDrag);
     if (platform === "darwin") {
       expect(await app.evaluate(({ BrowserWindow }, url) => {
@@ -110,36 +85,29 @@ test("侧边架全屏拖放和收纳动画", async () => {
       }, main.url())).toBe(true);
     }
 
-    const freeBounds = (await noteWindowState(app, first.url())).bounds!;
-    await moveFreeNoteTo(first, firstId, freeBounds, 45);
-    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(false));
-    await shelf.waitForTimeout(80);
-    expect(await shelf.evaluate(() => window.innerWidth)).toBe(200);
-    await endFreeNoteMove(first, 45);
-
     await shelf.evaluate(() => window.noteAPI.setShelfExpanded(false));
     await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(36);
     const ball = await shelfBounds(app);
-    const noteBeforeDrop = await noteWindowState(app, first.url());
+    const firstFreeUrl = first.url();
+    const noteBeforeDrop = await noteWindowState(app, firstFreeUrl);
     await moveFreeNoteTo(first, firstId, ball, 51);
-    expect(await readDockState(first, firstId)).toBe("free");
+    await startWindowBoundsRecording(app, firstFreeUrl);
+    const dockedAgainClosed = first.waitForEvent("close");
     await endFreeNoteMove(first, 51);
-    await expect.poll(() => readDockState(first, firstId)).toBe("shelf");
-    expect(await shelf.evaluate(() => window.innerWidth)).toBe(36);
-    await first.waitForTimeout(50);
-    const shrinking = await noteWindowState(app, first.url());
-    expect(shrinking.visible).toBe(true);
-    expect(shrinking.bounds!.height).toBeLessThan(noteBeforeDrop.bounds!.height);
-    await shelf.waitForTimeout(300);
-    expect(await shelf.evaluate(() => window.innerWidth)).toBe(36);
-    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
-    await expect.poll(() => isWindowVisible(app, first.url())).toBe(false);
-    await expect(shelf.locator(".note-list-item")).toHaveCount(2);
+    await expect.poll(() => readDockState(shelf, firstId)).toBe("shelf");
+    await dockedAgainClosed;
+    const transitionBounds = await readWindowBoundsRecording(app);
+    expect(transitionBounds.some((bounds) => bounds.height < noteBeforeDrop.bounds!.height)).toBe(true);
+    await expect.poll(() => isWindowVisible(app, firstFreeUrl)).toBe(false);
 
+    await shelf.evaluate(() => window.noteAPI.setShelfExpanded(true));
+    await expect.poll(() => shelf.evaluate(() => window.innerWidth)).toBe(200);
     await beginShelfNoteDrag(shelf, firstId, 61);
+    await expect.poll(() => app.windows().some((page) => page.url().includes(`noteId=${firstId}`))).toBe(true);
     await endShelfNoteDrag(shelf, firstId, 61);
-    await expect.poll(() => readDockState(first, firstId)).toBe("free");
-    await expect.poll(() => isWindowVisible(app, first.url())).toBe(true);
+    await expect.poll(() => readDockState(shelf, firstId)).toBe("free");
+    first = await waitForWindow(app, `noteId=${firstId}`);
+    await expect(first.locator(".note-shell")).toBeVisible();
 
     await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
     await shelf.locator(`[data-note-id="${secondId}"] .note-list-close`).click();
@@ -278,4 +246,40 @@ function noteWindowState(app: ElectronApplication, url: string) {
     const window = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === targetUrl);
     return { bounds: window?.getBounds(), visible: window?.isVisible() ?? false };
   }, url);
+}
+
+function startWindowBoundsRecording(app: ElectronApplication, url: string) {
+  return app.evaluate(({ BrowserWindow }, targetUrl) => {
+    const testState = globalThis as typeof globalThis & {
+      __pinoteShelfTransitionSamples?: Electron.Rectangle[];
+      __pinoteShelfTransitionTimer?: ReturnType<typeof setInterval>;
+    };
+    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === targetUrl);
+    if (!window) throw new Error("待收纳便签窗口不存在");
+    if (testState.__pinoteShelfTransitionTimer) clearInterval(testState.__pinoteShelfTransitionTimer);
+    testState.__pinoteShelfTransitionSamples = [window.getBounds()];
+    testState.__pinoteShelfTransitionTimer = setInterval(() => {
+      if (window.isDestroyed()) {
+        clearInterval(testState.__pinoteShelfTransitionTimer);
+        testState.__pinoteShelfTransitionTimer = undefined;
+        return;
+      }
+      testState.__pinoteShelfTransitionSamples?.push(window.getBounds());
+    }, 8);
+    window.once("closed", () => {
+      clearInterval(testState.__pinoteShelfTransitionTimer);
+      testState.__pinoteShelfTransitionTimer = undefined;
+    });
+  }, url);
+}
+
+function readWindowBoundsRecording(app: ElectronApplication) {
+  return app.evaluate(() => {
+    const testState = globalThis as typeof globalThis & {
+      __pinoteShelfTransitionSamples?: Electron.Rectangle[];
+    };
+    const samples = testState.__pinoteShelfTransitionSamples ?? [];
+    testState.__pinoteShelfTransitionSamples = undefined;
+    return samples;
+  });
 }

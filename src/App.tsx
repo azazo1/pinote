@@ -1,5 +1,5 @@
 import { Tags } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ColorPicker, noteColors } from "./components/ColorPicker";
 import { IconButton } from "./components/IconButton";
 import { InlineShelf } from "./components/InlineShelf";
@@ -22,10 +22,22 @@ interface PendingBatch {
 
 const SAVE_RETRY_DELAYS_MS = [500, 2_000, 5_000];
 
-export default function App() {
-  const query = useMemo(() => new URLSearchParams(window.location.search), []);
-  const noteId = query.get("noteId") ?? "";
-  const initialFocus = query.get("initialFocus");
+export interface NoteWorkspaceHandle {
+  flush: () => Promise<void>;
+  focusEditor: () => void;
+  focusTitle: () => void;
+}
+
+interface NoteWorkspaceProps {
+  noteId: string;
+  initialFocus?: string | null;
+  presentation?: "window" | "shelf";
+}
+
+export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>(function NoteWorkspace(
+  { noteId, initialFocus = null, presentation = "window" },
+  ref,
+) {
   const [note, setNote] = useState<Note | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [metadataOpen, setMetadataOpen] = useState(false);
@@ -125,6 +137,12 @@ export default function App() {
     }
   }, [noteId]);
 
+  useImperativeHandle(ref, () => ({
+    flush: flushPendingPatch,
+    focusEditor: () => editorRef.current?.focus(),
+    focusTitle: () => titleInputRef.current?.focus(),
+  }), [flushPendingPatch]);
+
   const queueContentPatch = useCallback((patch: ContentPatch) => {
     saveRetryIndex.current = 0;
     if (pendingBaseRevision.current === null) {
@@ -169,7 +187,11 @@ export default function App() {
   }, [noteId]);
 
   const toggleDock = useCallback(() => {
-    void window.noteAPI.toggleNoteDock(noteId).then((result) => {
+    void flushPendingPatch().then(() => (
+      presentation === "shelf"
+        ? window.noteAPI.undockNote(noteId)
+        : window.noteAPI.dockNote(noteId)
+    )).then((result) => {
       const localPatch = mergePendingPatches(inFlightBatches.current, pendingPatch.current);
       const baseRevision = currentBranchBase(inFlightBatches.current, pendingBaseRevision.current);
       if (!result.note) {
@@ -186,7 +208,7 @@ export default function App() {
         dirty: baseRevision !== null || dockedNote.dirty,
       }));
     });
-  }, [noteId]);
+  }, [flushPendingPatch, noteId, presentation]);
 
   const togglePinned = useCallback(() => {
     setNote((current) => {
@@ -220,8 +242,12 @@ export default function App() {
   }, []);
 
   const closeWindow = useCallback(() => {
-    void flushPendingPatch().then(() => window.noteAPI.closeNote(noteId));
-  }, [flushPendingPatch, noteId]);
+    void flushPendingPatch().then(() => (
+      presentation === "shelf"
+        ? window.noteAPI.closeDockedNote(noteId)
+        : window.noteAPI.closeNote(noteId)
+    ));
+  }, [flushPendingPatch, noteId, presentation]);
 
   const setArchived = useCallback(async (archived: boolean) => {
     await flushPendingPatch();
@@ -289,6 +315,7 @@ export default function App() {
       }
     });
     const offRemote = window.noteAPI.onRemoteNote((remote) => {
+      if (remote.id !== noteId) return;
       const localPatch = mergePendingPatches(inFlightBatches.current, pendingPatch.current);
       const baseRevision = currentBranchBase(inFlightBatches.current, pendingBaseRevision.current);
       contentRevision.current = baseRevision ?? remote.revision;
@@ -352,16 +379,17 @@ export default function App() {
   } as React.CSSProperties;
   const docked = note.dockState !== "free";
   const inlineShelf = note.dockState === "inline";
+  const embedded = presentation === "shelf";
 
   return (
     <main
-      className={`note-shell${note.collapsed ? " is-collapsed" : ""}${inlineShelf ? " has-inline-shelf" : ""}`}
+      className={`note-shell${note.collapsed ? " is-collapsed" : ""}${inlineShelf ? " has-inline-shelf" : ""}${embedded ? " is-shelf-workspace" : ""}`}
       style={style}
-      onPointerDownCapture={() => window.noteAPI.enableWindowFocus(note.id)}
-      onMouseEnter={docked ? () => window.noteAPI.revealGroup() : undefined}
-      onMouseLeave={docked ? () => window.noteAPI.hideGroup() : undefined}
+      onPointerDownCapture={embedded ? undefined : () => window.noteAPI.enableWindowFocus(note.id)}
+      onMouseEnter={docked && !embedded ? () => window.noteAPI.revealGroup() : undefined}
+      onMouseLeave={docked && !embedded ? () => window.noteAPI.hideGroup() : undefined}
     >
-      {!note.collapsed && !capabilities.wayland && <WindowResizeHandles noteId={note.id} />}
+      {!embedded && !note.collapsed && !capabilities.wayland && <WindowResizeHandles noteId={note.id} />}
 
       <TitleBar
         noteId={note.id}
@@ -374,6 +402,7 @@ export default function App() {
         onClose={closeWindow}
         onCollapse={toggleCollapse}
         nativeDrag={capabilities.wayland}
+        embedded={embedded}
       />
 
       {pickerOpen && (
@@ -433,7 +462,7 @@ export default function App() {
         />
       </section>
 
-      {inlineShelf && <InlineShelf activeId={note.id} />}
+      {inlineShelf && !embedded && <InlineShelf activeId={note.id} />}
 
       <footer className="note-footer">
         <time dateTime={new Date(note.modifiedAt).toISOString()}>{dateLabel(note.modifiedAt)}</time>
@@ -460,6 +489,11 @@ export default function App() {
       </footer>
     </main>
   );
+});
+
+export default function App() {
+  const query = useMemo(() => new URLSearchParams(window.location.search), []);
+  return <NoteWorkspace noteId={query.get("noteId") ?? ""} initialFocus={query.get("initialFocus")} />;
 }
 
 function equalTags(left: readonly string[], right: readonly string[]) {

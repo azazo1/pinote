@@ -23,18 +23,19 @@ contextBridge.exposeInMainWorld("noteAPI", {
   }),
   endWindowResize: (id) => ipcRenderer.send("window:resize-end", id),
   setPinned: (id, pinned) => ipcRenderer.invoke("window:set-pinned", id, pinned),
-  toggleNoteDock: (id) => ipcRenderer.invoke("group:toggle-note-dock", id),
+  dockNote: (id) => ipcRenderer.invoke("group:dock-note", id),
+  undockNote: (id) => ipcRenderer.invoke("group:undock-note", id),
   revealGroup: () => ipcRenderer.send("group:reveal"),
   hideGroup: () => ipcRenderer.send("group:hide"),
   cancelGroupHide: () => ipcRenderer.send("group:cancel-hide"),
   listNotes: (includeDrafts = false) => ipcRenderer.invoke("notes:list", includeDrafts),
   activateDockedNote: (id) => ipcRenderer.invoke("group:activate-note", id),
   closeDockedNote: (id) => ipcRenderer.invoke("group:close-docked-note", id),
-  setShelfExpanded: (expanded) => ipcRenderer.send("shelf:set-expanded", expanded),
+  setShelfExpanded: (expanded) => ipcRenderer.invoke("shelf:set-expanded", expanded),
   beginShelfMove: () => ipcRenderer.send("shelf:move-start"),
   moveShelf: (deltaX, deltaY) => ipcRenderer.send("shelf:move", deltaX, deltaY),
   endShelfMove: () => ipcRenderer.send("shelf:move-end"),
-  beginShelfNoteDrag: (id, pointerX, pointerY, sourceBounds) => ipcRenderer.send("shelf:note-drag-start", id, pointerX, pointerY, sourceBounds),
+  beginShelfNoteDrag: (id, pointerX, pointerY, sourceBounds) => ipcRenderer.invoke("shelf:note-drag-start", id, pointerX, pointerY, sourceBounds),
   moveShelfNoteDrag: (id, pointerX, pointerY, dropBounds) => ipcRenderer.send("shelf:note-drag", id, pointerX, pointerY, dropBounds),
   endShelfNoteDrag: (id) => ipcRenderer.send("shelf:note-drag-end", id),
   getSyncSettings: () => ipcRenderer.invoke("sync:get-settings"),
@@ -105,5 +106,10 @@ contextBridge.exposeInMainWorld("noteAPI", {
     const listener = (_event, edge) => callback(edge);
     ipcRenderer.on("shelf:placement", listener);
     return () => ipcRenderer.removeListener("shelf:placement", listener);
+  },
+  onShelfWorkspace: (callback) => {
+    const listener = (_event, metrics) => callback(metrics);
+    ipcRenderer.on("shelf:workspace", listener);
+    return () => ipcRenderer.removeListener("shelf:workspace", listener);
   },
 });
