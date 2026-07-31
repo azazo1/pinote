@@ -67,7 +67,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
   const collapsedRef = useRef(false);
   const archivedRef = useRef(false);
   const noteLoadedRef = useRef(false);
-  const titleInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<NoteEditorHandle>(null);
   const initialFocusApplied = useRef(false);
 
@@ -452,13 +452,14 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
               onChange={() => void setArchived(false)}
             />
           )}
-          <input
+          <textarea
             ref={titleInputRef}
             className="title-input"
+            rows={1}
             value={note.title}
             onChange={(event) => applyContentPatch({ title: event.target.value })}
             onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
               event.preventDefault();
               editorRef.current?.focus();
             }}

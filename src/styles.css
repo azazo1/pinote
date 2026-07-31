@@ -610,6 +610,7 @@ button {
 }
 
 .title-input {
+  display: block;
   width: auto;
   flex: 1;
   min-width: 0;
@@ -617,10 +618,19 @@ button {
   color: var(--note-ink);
   background: transparent;
   border: 0;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
   font-size: 20px;
   font-weight: 720;
   letter-spacing: 0;
   line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  field-sizing: content;
+  max-height: calc(1.25em * 10 + 5px);
+  scrollbar-color: color-mix(in srgb, var(--note-ink) 25%, transparent) transparent;
+  scrollbar-width: thin;
 }
 
 .title-input::placeholder,
