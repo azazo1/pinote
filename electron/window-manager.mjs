@@ -775,6 +775,7 @@ export class WindowManager {
     if (persist) this.persistBounds(id);
     const mode = this.getDockMode();
     this.store.setDockState(id, mode);
+    if (this.store.getWindowState(id).collapsed) this.toggleCollapse(id);
     this.cancelHideGroup();
     if (mode === "shelf") {
       const shelf = this.ensureShelfWindow();
@@ -1155,6 +1156,7 @@ export class WindowManager {
       const window = this.windows.get(session.id);
       const shelf = this.shelfWindow;
       if (!window || window.isDestroyed() || !shelf || shelf.isDestroyed()) return false;
+      if (this.store.getWindowState(session.id).collapsed) this.toggleCollapse(session.id);
       void this.setShelfExpanded(true);
       this.beginNoteTransition(session.id, window);
       const target = this.shelfNoteTransitionBounds(shelf, session.dropBounds);
