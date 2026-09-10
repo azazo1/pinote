@@ -10,7 +10,8 @@
 # 产出: release/pinote-<version>-linux-<arch>.tar.gz
 #       fake 构建为 release/pinote-v0.0.0-linux-<arch>-fake.tar.gz
 #
-# 归档顶层直接是 release/linux-unpacked 的内容, 不额外套一层目录, 客户端解包后整目录换位替换.
+# 归档顶层直接是 electron-builder 便携目录的内容, 不额外套一层目录, 客户端解包后整目录换位替换.
+# x64 为 release/linux-unpacked, 其他架构为 release/linux-<electron_arch>-unpacked.
 # 只构建运行平台自身的架构 (uname -m), 不同架构由 CI 的独立 runner 负责, 不做交叉打包.
 
 set -euo pipefail
@@ -52,10 +53,16 @@ rm -rf release
 
 bunx electron-builder --linux --dir "--$electron_arch" --publish never
 
-payload="release/linux-unpacked"
+if [[ "$electron_arch" == "x64" ]]; then
+  payload="release/linux-unpacked"
+else
+  payload="release/linux-${electron_arch}-unpacked"
+fi
 executable="$payload/pinote"
 if [[ ! -d "$payload" ]]; then
   echo "缺少 electron-builder 便携目录: $payload" >&2
+  echo "当前 release/ 内容:" >&2
+  ls -la release >&2 || true
   exit 1
 fi
 if [[ ! -x "$executable" ]]; then

@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 # 外部命令的退出码在 Invoke-Bun 里显式判定, 不让 PowerShell 7.3+ 把它当成终止性错误.
 $PSNativeCommandUseErrorActionPreference = $false
 
@@ -6,7 +6,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 #
 # 用法:
 #   $env:PROJECT_BUILD_VERSION = "v0.5.0"
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dist-windows.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dist-windows.ps1
 #   通常经 just dist / just fake-dist 注入版本号后调用.
 #
 # 步骤: bun run build → bun run icons → bun run version:embed → electron-builder --dir 产出便携目录
@@ -14,7 +14,8 @@ $PSNativeCommandUseErrorActionPreference = $false
 # 产出: release/pinote-<version>-windows-<arch>.zip
 #       fake 构建为 release/pinote-v0.0.0-windows-<arch>-fake.zip
 #
-# 归档顶层直接是 release/win-unpacked 的内容, 不额外套一层目录, 客户端解包后整目录换位替换.
+# 归档顶层直接是 electron-builder 便携目录的内容, 不额外套一层目录, 客户端解包后整目录换位替换.
+# x64 为 release/win-unpacked, 其他架构为 release/win-<electronArch>-unpacked.
 # zip 条目统一使用 / 分隔符, 避免 Expand-Archive 在 windows 上还原出带反斜杠的文件名.
 # 只构建运行平台自身的架构 (PROCESSOR_ARCHITECTURE), 不做交叉打包.
 
@@ -71,9 +72,14 @@ if (Test-Path -LiteralPath $releaseDir) {
 # bun x 等同于 bunx, 但不需要依赖 windows 上单独的 bunx 可执行文件.
 Invoke-Bun @("x", "electron-builder", "--win", "--dir", "--$electronArch", "--publish", "never")
 
-$payload = Join-Path $releaseDir "win-unpacked"
+$payloadName = if ($electronArch -eq "x64") { "win-unpacked" } else { "win-$electronArch-unpacked" }
+$payload = Join-Path $releaseDir $payloadName
 if (-not (Test-Path -LiteralPath $payload -PathType Container)) {
-    throw "缺少 electron-builder 便携目录: $payload"
+    $available = @()
+    if (Test-Path -LiteralPath $releaseDir) {
+        $available = Get-ChildItem -LiteralPath $releaseDir | ForEach-Object { $_.Name }
+    }
+    throw "缺少 electron-builder 便携目录: $payload, 当前 release/ 内容: $($available -join ', ')"
 }
 
 $executable = Join-Path $payload "Pinote.exe"

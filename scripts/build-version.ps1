@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 # git 的失败退出码在 Get-GitOutput 里显式判定, 不让 PowerShell 7.3+ 把它当成终止性错误.
 $PSNativeCommandUseErrorActionPreference = $false
 

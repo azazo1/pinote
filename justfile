@@ -26,8 +26,9 @@ dist:
     PROJECT_BUILD_VERSION="${PROJECT_BUILD_VERSION:-v$(bash scripts/build-version.sh)}" bash scripts/dist-linux.sh
 
 # 根据当前平台生成发布产物.
+# 使用 pwsh 解析 UTF-8 打包脚本, 避免 powershell.exe 把中文字符串读坏.
 [windows]
-[script('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')]
+[script('pwsh', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')]
 dist:
     $ErrorActionPreference = 'Stop'
     if (-not $env:PROJECT_BUILD_VERSION) {
@@ -49,7 +50,7 @@ fake-dist:
 
 # 生成专用于自动更新测试的 fake 构建, 版本固定 v0.0.0 且产物名追加 -fake, 只在本地使用.
 [windows]
-[script('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')]
+[script('pwsh', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')]
 fake-dist:
     $ErrorActionPreference = 'Stop'
     $env:PROJECT_BUILD_VERSION = 'v0.0.0'
