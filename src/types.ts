@@ -99,9 +99,12 @@ export interface GeneralSettings {
   launchAtLogin: boolean;
   launchAtLoginSupported: boolean;
   showMainOnLogin: boolean;
+  startHidden: boolean;
   closeMainToTray: boolean;
   hideDockOnMainClose: boolean;
   hideDockOnMainCloseSupported: boolean;
+  verboseLogging: boolean;
+  updateAutoCheck: boolean;
   defaultNoteColor: string;
   defaultNotePinned: boolean;
 }
@@ -123,9 +126,55 @@ export interface AppSettings {
 export interface AppInfo {
   name: string;
   version: string;
+  buildVersion: string;
+  devBuild: boolean;
+  fakeBuild: boolean;
   electronVersion: string;
   platform: string;
   arch: string;
+  logFile: string;
+}
+
+export type UpdateStateName =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "ready-to-restart"
+  | "handed-off"
+  | "manual-required"
+  | "failed";
+
+export interface UpdateErrorInfo {
+  message: string;
+  kind: string;
+}
+
+export interface UpdateProgress {
+  received: number;
+  total: number | null;
+}
+
+export interface UpdateSnapshot {
+  state: UpdateStateName;
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseName: string;
+  releaseNotes: string;
+  releaseUrl: string;
+  checkedAt: number | null;
+  manualCheck: boolean;
+  skipped: boolean;
+  error: UpdateErrorInfo | null;
+  progress: UpdateProgress | null;
+  applyResult: string | null;
+  message: string;
+  assetName: string | null;
+  autoCheck: boolean;
+  skippedVersion: string;
+  canAutoInstall: boolean;
+  isFakeBuild: boolean;
 }
 
 export interface NoteAPI {
@@ -182,6 +231,15 @@ export interface NoteAPI {
   resetShortcut: (id: ShortcutCommandId) => Promise<AppSettings>;
   resetShortcuts: () => Promise<AppSettings>;
   getAppInfo: () => Promise<AppInfo>;
+  getUpdateState: () => Promise<UpdateSnapshot>;
+  checkUpdate: () => Promise<UpdateSnapshot>;
+  downloadUpdate: () => Promise<UpdateSnapshot>;
+  cancelUpdate: () => Promise<boolean>;
+  skipUpdateVersion: () => Promise<UpdateSnapshot>;
+  restartToApplyUpdate: () => Promise<boolean>;
+  openUpdateWindow: () => Promise<boolean>;
+  openUpdateReleasePage: () => Promise<boolean>;
+  dismissUpdateApplyResult: () => Promise<boolean>;
   onCollapsed: (callback: (collapsed: boolean) => void) => () => void;
   onGroupState: (callback: (state: GroupState) => void) => () => void;
   onCommand: (callback: (command: AppCommand) => void) => () => void;
@@ -189,6 +247,7 @@ export interface NoteAPI {
   onFlushRequested: (callback: () => Promise<void>) => () => void;
   onSyncStatus: (callback: (status: SyncStatus) => void) => () => void;
   onAppSettings: (callback: (settings: AppSettings) => void) => () => void;
+  onUpdateState: (callback: (state: UpdateSnapshot) => void) => () => void;
   onNoteList: (callback: (notes: NoteSummary[]) => void) => () => void;
   onShelfExpanded: (callback: (expanded: boolean) => void) => () => void;
   onShelfPlacement: (callback: (edge: ShelfPlacementEdge) => void) => () => void;

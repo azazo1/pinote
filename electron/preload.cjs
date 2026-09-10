@@ -48,6 +48,20 @@ contextBridge.exposeInMainWorld("noteAPI", {
   resetShortcut: (id) => ipcRenderer.invoke("settings:reset-shortcut", id),
   resetShortcuts: () => ipcRenderer.invoke("settings:reset-shortcuts"),
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
+  getUpdateState: () => ipcRenderer.invoke("update:get-state"),
+  checkUpdate: () => ipcRenderer.invoke("update:check"),
+  downloadUpdate: () => ipcRenderer.invoke("update:download"),
+  cancelUpdate: () => ipcRenderer.invoke("update:cancel"),
+  skipUpdateVersion: () => ipcRenderer.invoke("update:skip"),
+  restartToApplyUpdate: () => ipcRenderer.invoke("update:restart"),
+  openUpdateWindow: () => ipcRenderer.invoke("update:open-window"),
+  openUpdateReleasePage: () => ipcRenderer.invoke("update:open-release-page"),
+  dismissUpdateApplyResult: () => ipcRenderer.invoke("update:dismiss-apply-result"),
+  onUpdateState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("update:state", listener);
+    return () => ipcRenderer.removeListener("update:state", listener);
+  },
   onCollapsed: (callback) => {
     const listener = (_event, collapsed) => callback(collapsed);
     ipcRenderer.on("note:collapsed", listener);

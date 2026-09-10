@@ -1,17 +1,21 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
+import { configureAppLogging, installProcessErrorHandlers, logRuntimeInfo, setLogLevel } from "./app-logging.mjs";
 import { NoteStore } from "./note-store.mjs";
 import { ShortcutManager } from "./shortcut-manager.mjs";
 import { SHORTCUT_COMMANDS } from "./shortcut-settings.mjs";
-import { createTrayIcon } from "./tray-icon.mjs";
 import { WindowManager } from "./window-manager.mjs";
 import { SyncService } from "./sync-service.mjs";
-
-log.initialize();
-log.transports.file.level = "info";
-log.transports.console.level = process.env.VITE_DEV_SERVER_URL ? "debug" : "info";
+import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance.mjs";
+import { installTerminationHandlers } from "./process-signals.mjs";
+import { createAppTray } from "./tray.mjs";
+import { UpdateService } from "./update-service.mjs";
+import { UpdateWindow } from "./update-window.mjs";
+import { resolveUpdateConfig } from "./update/release-query.mjs";
+import { isDevBuildVersion, isFakeBuildVersion, resolveRuntimeVersion } from "./version.mjs";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const RESIZE_EDGES = new Set(["n", "s", "e", "w", "nw", "sw", "se"]);
@@ -29,110 +33,177 @@ const NOTE_COMMANDS = new Set([
 
 if (process.platform === "linux") app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 
+// 版本号在窗口与托盘都出现, 启动时解析一次即可.
+const runtimeVersion = resolveRuntimeVersion({
+  env: process.env,
+  packaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  appVersion: app.getVersion(),
+});
+
+// 数据目录: 显式覆盖优先, 其次是 fake 构建的隔离目录, 保证 fake 实例与正式实例互不干扰.
+if (process.env.PINOTE_USER_DATA) app.setPath("userData", process.env.PINOTE_USER_DATA);
+else if (isFakeBuildVersion(runtimeVersion)) app.setPath("userData", `${app.getPath("userData")}-fake`);
+
+const { filePath: logFile, level: initialLogLevel } = configureAppLogging({
+  userDataPath: app.getPath("userData"),
+});
+installProcessErrorHandlers();
+
 let store;
 let windows;
 let sync;
 let shortcutManager;
 let tray = null;
+let trayController = null;
+let updateService = null;
+let updateWindow = null;
 let quitStarted = false;
 let quitReady = false;
 let quitConfirmationOpen = false;
+let quitForUpdate = false;
 
-if (process.env.PINOTE_USER_DATA) app.setPath("userData", process.env.PINOTE_USER_DATA);
-
-app.whenReady().then(async () => {
-  if (process.platform === "darwin") {
-    app.setActivationPolicy("regular");
-    log.info("macOS 应用窗口策略已设置", { activationPolicy: "regular" });
-  }
-  log.info("Pinote 正在启动", { platform: process.platform, electron: process.versions.electron });
-  store = new NoteStore(app.getPath("userData"));
-  await store.load();
-  windows = new WindowManager(store, {
-    requestQuit: (owner) => void confirmAndQuit(owner),
-    showDock: showDockIcon,
-    hideDock: hideDockIcon,
-    isAppActive: () => process.platform === "darwin" ? app.isActive() : Boolean(BrowserWindow.getFocusedWindow()),
-  });
-  sync = new SyncService(store, windows);
-  registerIpc();
-  installTray();
-  sync.initialize();
-  shortcutManager = new ShortcutManager({
-    platform: process.platform,
-    getBindings: () => store.getPreferences().shortcuts,
-    saveBindings: (shortcuts) => store.updatePreferences({ shortcuts }),
-    execute: (id) => executeShortcut(id, BrowserWindow.getFocusedWindow()),
-    installMenu,
-    broadcast: broadcastSettings,
-  });
-  shortcutManager.initialize();
-  if (!process.argv.includes(LOGIN_HIDDEN_ARGUMENT)) windows.openMainWindow();
-  for (const note of store.state.notes) {
-    if (store.getWindowState(note.id).open && store.getDockState(note.id) !== "shelf") windows.open(note);
-  }
-  windows.restoreDockedMode();
-
-  app.on("activate", () => {
-    if (quitStarted || !windows.shouldOpenMainWindowOnActivate()) return;
-    windows.openMainWindow();
-  });
-  app.on("browser-window-blur", (_event, window) => {
+if (!acquireSingleInstanceLock({
+  app,
+  onSecondInstance: () => {
     if (quitStarted) return;
-    windows.handleBrowserWindowBlur(window);
-  });
-  app.on("browser-window-focus", () => windows.cancelAppBlurHide());
-  if (process.platform === "darwin") {
-    app.on("did-resign-active", () => windows.handleApplicationBlur());
-    app.on("did-become-active", () => windows.cancelAppBlurHide());
-  }
-}).catch((error) => {
-  log.error("Pinote 启动失败", error);
+    windows?.openMainWindow();
+  },
+})) {
   app.quit();
-});
+} else {
+  startApplication();
+}
 
-app.on("window-all-closed", () => {
-  const trayAvailable = tray && !tray.isDestroyed();
-  if (process.platform !== "darwin" && !trayAvailable) app.quit();
-});
-
-app.on("before-quit", (event) => {
-  if (quitReady) return;
-  event.preventDefault();
-  if (quitStarted) return;
-  quitStarted = true;
-  windows?.prepareToQuit();
-  void (async () => {
-    let completed = false;
-    try {
-      let flushed = windows ? await windows.flushPendingNotes() : true;
-      if (!flushed && windows) flushed = await windows.flushPendingNotes();
-      if (!flushed) throw new Error("仍有便签内容未保存");
-      await sync?.stop();
-      await store?.save();
-      completed = true;
-    } catch (error) {
-      log.error("退出前保存失败", error);
-      dialog.showErrorBox("Pinote 无法退出", "仍有便签内容未保存, 请稍后重试.");
-    } finally {
-      if (completed) {
-        quitReady = true;
-        app.quit();
-      } else {
-        quitStarted = false;
-        windows?.cancelQuit();
-        if (sync?.stopped) sync.initialize();
-        windows?.openMainWindow();
-      }
+function startApplication() {
+  app.whenReady().then(async () => {
+    if (process.platform === "darwin") {
+      app.setActivationPolicy("regular");
+      log.info("macOS 应用窗口策略已设置", { activationPolicy: "regular" });
     }
-  })();
-});
+    logRuntimeInfo({ app, version: runtimeVersion, logFile, level: initialLogLevel });
+    store = new NoteStore(app.getPath("userData"));
+    await store.load();
+    if (store.getPreferences().verboseLogging) setLogLevel("debug");
+    windows = new WindowManager(store, {
+      requestQuit: (owner) => void confirmAndQuit(owner),
+      showDock: showDockIcon,
+      hideDock: hideDockIcon,
+      isAppActive: () => process.platform === "darwin" ? app.isActive() : Boolean(BrowserWindow.getFocusedWindow()),
+    });
+    sync = new SyncService(store, windows);
+    updateWindow = new UpdateWindow();
+    updateService = new UpdateService({
+      store,
+      userDataPath: app.getPath("userData"),
+      currentVersion: runtimeVersion,
+      ...resolveUpdateConfig(process.env),
+      execPath: process.execPath,
+      packaged: app.isPackaged,
+      logger: log,
+      notify: notifyUpdate,
+      broadcast: broadcastUpdateState,
+      requestQuit: (reason) => {
+        if (reason === "update") quitForUpdate = true;
+        app.quit();
+      },
+      restartApp: restartApplication,
+      openArtifact: openUpdateArtifact,
+      openReleasePage,
+    });
+    registerIpc();
+    installTray();
+    installTerminationHandlers({
+      requestQuit: (signal) => {
+        if (quitStarted) return;
+        log.info("终端信号触发退出", { signal });
+        app.quit();
+      },
+    });
+    sync.initialize();
+    shortcutManager = new ShortcutManager({
+      platform: process.platform,
+      getBindings: () => store.getPreferences().shortcuts,
+      saveBindings: (shortcuts) => store.updatePreferences({ shortcuts }),
+      execute: (id) => executeShortcut(id, BrowserWindow.getFocusedWindow()),
+      installMenu,
+      broadcast: broadcastSettings,
+    });
+    shortcutManager.initialize();
+    updateService.initialize();
+    const startHidden = store.getPreferences().startHidden || process.argv.includes(LOGIN_HIDDEN_ARGUMENT);
+    if (!startHidden) windows.openMainWindow();
+    else log.info("按设置保持主窗口隐藏");
+    for (const note of store.state.notes) {
+      if (store.getWindowState(note.id).open && store.getDockState(note.id) !== "shelf") windows.open(note);
+    }
+    windows.restoreDockedMode();
 
-app.on("will-quit", () => {
-  shortcutManager?.dispose();
-  tray?.destroy();
-  tray = null;
-});
+    app.on("activate", () => {
+      if (quitStarted || !windows.shouldOpenMainWindowOnActivate()) return;
+      windows.openMainWindow();
+    });
+    app.on("browser-window-blur", (_event, window) => {
+      if (quitStarted) return;
+      windows.handleBrowserWindowBlur(window);
+    });
+    app.on("browser-window-focus", () => windows.cancelAppBlurHide());
+    if (process.platform === "darwin") {
+      app.on("did-resign-active", () => windows.handleApplicationBlur());
+      app.on("did-become-active", () => windows.cancelAppBlurHide());
+    }
+  }).catch((error) => {
+    log.error("Pinote 启动失败", error);
+    app.quit();
+  });
+
+  app.on("window-all-closed", () => {
+    const trayAvailable = tray && !tray.isDestroyed();
+    if (process.platform !== "darwin" && !trayAvailable) app.quit();
+  });
+
+  app.on("before-quit", (event) => {
+    if (quitReady) return;
+    event.preventDefault();
+    if (quitStarted) return;
+    quitStarted = true;
+    windows?.prepareToQuit();
+    void (async () => {
+      let completed = false;
+      try {
+        let flushed = windows ? await windows.flushPendingNotes() : true;
+        if (!flushed && windows) flushed = await windows.flushPendingNotes();
+        if (!flushed && !quitForUpdate) throw new Error("仍有便签内容未保存");
+        await sync?.stop();
+        await store?.save();
+        completed = true;
+      } catch (error) {
+        log.error("退出前保存失败", error);
+        if (!quitForUpdate) dialog.showErrorBox("Pinote 无法退出", "仍有便签内容未保存, 请稍后重试.");
+      } finally {
+        if (completed || quitForUpdate) {
+          quitReady = true;
+          app.quit();
+        } else {
+          quitStarted = false;
+          windows?.cancelQuit();
+          if (sync?.stopped) sync.initialize();
+          windows?.openMainWindow();
+        }
+      }
+    })();
+  });
+
+  app.on("will-quit", () => {
+    log.info("Pinote 正在退出", { version: runtimeVersion });
+    releaseSingleInstanceLock({ app });
+    updateService?.dispose();
+    shortcutManager?.dispose();
+    tray?.destroy();
+    tray = null;
+    trayController = null;
+  });
+}
 
 function registerIpc() {
   ipcMain.handle("note:get", (_event, id) => ({
@@ -241,13 +312,25 @@ function registerIpc() {
     shortcutManager.resetAll();
     return getAppSettings();
   });
-  ipcMain.handle("app:get-info", () => ({
-    name: app.getName(),
-    version: app.getVersion(),
-    electronVersion: process.versions.electron,
-    platform: process.platform,
-    arch: process.arch,
-  }));
+  ipcMain.handle("app:get-info", () => getAppInfo());
+  ipcMain.handle("update:get-state", () => updateService.getState());
+  ipcMain.handle("update:check", () => updateService.checkForUpdates({ manual: true }));
+  ipcMain.handle("update:download", () => updateService.startDownload());
+  ipcMain.handle("update:cancel", () => updateService.cancelDownload());
+  ipcMain.handle("update:skip", () => updateService.skipLatestVersion());
+  ipcMain.handle("update:restart", () => updateService.restartToApply());
+  ipcMain.handle("update:open-release-page", () => {
+    updateService.openReleasePage();
+    return true;
+  });
+  ipcMain.handle("update:dismiss-apply-result", () => {
+    updateService.dismissApplyResult();
+    return true;
+  });
+  ipcMain.handle("update:open-window", () => {
+    updateWindow.open();
+    return true;
+  });
 }
 
 function installMenu(bindings) {
@@ -265,6 +348,7 @@ function installMenu(bindings) {
       label: "Pinote",
       submenu: [
         { label: "关于 Pinote", role: "about" },
+        { label: "检查更新", click: openUpdateWindowWithCheck },
         { type: "separator" },
         item("open-main-window"),
         { type: "separator" },
@@ -377,6 +461,20 @@ async function confirmAndQuit(owner) {
   }
 }
 
+function getAppInfo() {
+  return {
+    name: app.getName(),
+    version: runtimeVersion,
+    buildVersion: runtimeVersion,
+    devBuild: isDevBuildVersion(runtimeVersion),
+    fakeBuild: isFakeBuildVersion(runtimeVersion),
+    electronVersion: process.versions.electron,
+    platform: process.platform,
+    arch: process.arch,
+    logFile,
+  };
+}
+
 function getAppSettings() {
   const preferences = store.getPreferences();
   const loginSupported = process.platform === "darwin" || process.platform === "win32";
@@ -393,9 +491,12 @@ function getAppSettings() {
       launchAtLogin,
       launchAtLoginSupported: loginSupported,
       showMainOnLogin: preferences.showMainOnLogin,
+      startHidden: preferences.startHidden,
       closeMainToTray: preferences.closeMainToTray,
       hideDockOnMainClose: preferences.hideDockOnMainClose,
       hideDockOnMainCloseSupported: process.platform === "darwin",
+      verboseLogging: preferences.verboseLogging,
+      updateAutoCheck: preferences.update.autoCheck,
       defaultNoteColor: preferences.defaultNoteColor,
       defaultNotePinned: preferences.defaultNotePinned,
     },
@@ -410,10 +511,14 @@ function updateGeneralSettings(patch) {
   if (!patch || typeof patch !== "object") throw new Error("设置内容无效");
   const current = store.getPreferences();
   const preferencesPatch = {};
-  for (const key of ["showMainOnLogin", "closeMainToTray", "hideDockOnMainClose", "defaultNotePinned"]) {
+  for (const key of ["showMainOnLogin", "startHidden", "closeMainToTray", "hideDockOnMainClose", "defaultNotePinned"]) {
     if (typeof patch[key] === "boolean") preferencesPatch[key] = patch[key];
   }
   if (typeof patch.defaultNoteColor === "string") preferencesPatch.defaultNoteColor = patch.defaultNoteColor;
+  if (Object.hasOwn(patch, "verboseLogging")) {
+    preferencesPatch.verboseLogging = Boolean(patch.verboseLogging);
+    setLogLevel(preferencesPatch.verboseLogging ? "debug" : "info");
+  }
   const nextShowMainOnLogin = preferencesPatch.showMainOnLogin ?? current.showMainOnLogin;
   const loginSupported = process.platform === "darwin" || process.platform === "win32";
   if (Object.hasOwn(patch, "launchAtLogin")) {
@@ -424,6 +529,7 @@ function updateGeneralSettings(patch) {
     if (openAtLogin) setLoginItem(true, nextShowMainOnLogin);
   }
   if (Object.keys(preferencesPatch).length > 0) store.updatePreferences(preferencesPatch);
+  if (Object.hasOwn(patch, "updateAutoCheck")) updateService.setAutoCheck(Boolean(patch.updateAutoCheck));
   log.info("通用设置已更新", { keys: Object.keys(patch) });
   broadcastSettings();
   return getAppSettings();
@@ -438,6 +544,57 @@ function setLoginItem(openAtLogin, showMainOnLogin) {
 
 function broadcastSettings() {
   windows.broadcast("settings:changed", getAppSettings());
+  trayController?.refresh();
+}
+
+function broadcastUpdateState(state) {
+  windows?.broadcast("update:state", state);
+  updateWindow?.broadcast("update:state", state);
+}
+
+function openUpdateWindowWithCheck() {
+  updateWindow.open();
+  void updateService.checkForUpdates({ manual: true });
+}
+
+function notifyUpdate({ title, body }) {
+  if (!Notification.isSupported()) {
+    log.debug("系统通知不可用, 跳过新版本提醒");
+    return;
+  }
+  try {
+    const notification = new Notification({ title, body });
+    notification.on("click", () => updateWindow?.open());
+    notification.show();
+  } catch (error) {
+    log.warn("发送系统通知失败", { message: error instanceof Error ? error.message : "未知错误" });
+  }
+}
+
+function openUpdateArtifact(artifactPath) {
+  if (!artifactPath) return;
+  log.info("更新需要手动完成安装", { artifactPath });
+  shell.showItemInFolder(artifactPath);
+}
+
+function openReleasePage(url) {
+  void shell.openExternal(url).catch((error) => {
+    log.warn("打开发布页面失败", { url, message: error instanceof Error ? error.message : "未知错误" });
+  });
+}
+
+// 替换已经完成后以新版本重启: 先释放单实例锁, 避免新进程抢锁失败直接退出.
+function restartApplication(executable) {
+  const target = typeof executable === "string" && executable.length > 0 ? executable : process.execPath;
+  log.info("以新版本重启应用", { target });
+  releaseSingleInstanceLock({ app });
+  try {
+    const child = spawn(target, [], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch (error) {
+    log.error("拉起新版本失败", error);
+  }
+  app.quit();
 }
 
 function showDockIcon() {
@@ -458,47 +615,42 @@ function installTray() {
     const iconPath = app.isPackaged
       ? path.join(process.resourcesPath, "icon.png")
       : path.join(currentDir, "..", "build", "generated", "icon.png");
-    const source = createTrayIcon({
+    trayController = createAppTray({
+      appName: app.getName(),
+      version: runtimeVersion,
+      iconPath,
       templatePath: path.join(currentDir, "assets", "trayTemplate.png"),
       retinaTemplatePath: path.join(currentDir, "assets", "trayTemplate@2x.png"),
-      appIconPath: iconPath,
+      isAutoCheckEnabled: () => store.getPreferences().update.autoCheck,
+      onOpenMainWindow: () => {
+        if (quitStarted) return;
+        log.info("从系统托盘打开主窗口");
+        windows.openMainWindow();
+      },
+      onCreateNote: () => {
+        if (quitStarted) return;
+        const note = windows.createNearFocused();
+        log.info("从系统托盘新建便签", { id: note.id });
+      },
+      onCheckUpdates: () => {
+        if (quitStarted) return;
+        openUpdateWindowWithCheck();
+      },
+      onToggleAutoCheck: (checked) => {
+        if (quitStarted) return;
+        updateGeneralSettings({ updateAutoCheck: checked });
+      },
+      onQuit: () => {
+        if (quitStarted) return;
+        log.info("从系统托盘退出 Pinote");
+        app.quit();
+      },
     });
-    if (source.isEmpty()) {
-      log.warn("系统托盘图标不可用", { iconPath });
-      return;
-    }
-    tray = new Tray(source);
-    tray.setToolTip("Pinote");
-
-    const openMainWindow = () => {
-      if (quitStarted) return;
-      log.info("从系统托盘打开主窗口");
-      windows.openMainWindow();
-    };
-    const createNote = () => {
-      if (quitStarted) return;
-      const note = windows.createNearFocused();
-      log.info("从系统托盘新建便签", { id: note.id });
-    };
-    const quit = () => {
-      if (quitStarted) return;
-      log.info("从系统托盘退出 Pinote");
-      app.quit();
-    };
-    const menu = Menu.buildFromTemplate([
-      { label: "打开主窗口", click: openMainWindow },
-      { label: "新建便签", click: createNote },
-      { type: "separator" },
-      { label: "退出 Pinote", click: quit },
-    ]);
-
-    tray.on("click", openMainWindow);
-    if (process.platform === "darwin") tray.on("right-click", () => tray?.popUpContextMenu(menu));
-    else tray.setContextMenu(menu);
-    windows.setTrayAvailable(true);
-    log.info("系统托盘已就绪", { platform: process.platform });
+    tray = trayController?.tray ?? null;
+    windows.setTrayAvailable(Boolean(trayController));
   } catch (error) {
     tray = null;
+    trayController = null;
     windows.setTrayAvailable(false);
     log.error("创建系统托盘失败", error);
   }

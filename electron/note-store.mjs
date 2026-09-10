@@ -4,7 +4,7 @@ import path from "node:path";
 import log from "electron-log/main.js";
 import { defaultShortcutBindings, normalizeShortcutBindings } from "./shortcut-settings.mjs";
 
-const CURRENT_VERSION = 9;
+const CURRENT_VERSION = 10;
 const DEFAULT_COLOR = "lemon";
 const NOTE_COLORS = new Set(["lemon", "mint", "coral", "sky", "paper"]);
 const DEFAULT_SHELF_PLACEMENT = Object.freeze({ x: 1, y: 0.5, edge: "right" });
@@ -271,6 +271,7 @@ export class NoteStore {
       ...current,
       ...patch,
       shortcuts: patch?.shortcuts ?? current.shortcuts,
+      update: patch?.update ? { ...current.update, ...patch.update } : current.update,
     }, this.platform);
     void this.save();
     return this.getPreferences();
@@ -440,10 +441,18 @@ function normalizeState(value, platform = process.platform) {
 function normalizePreferences(value, platform) {
   return {
     showMainOnLogin: value?.showMainOnLogin !== false,
+    startHidden: Boolean(value?.startHidden),
     closeMainToTray: value?.closeMainToTray !== false,
     hideDockOnMainClose: Boolean(value?.hideDockOnMainClose),
+    verboseLogging: Boolean(value?.verboseLogging),
     defaultNoteColor: NOTE_COLORS.has(value?.defaultNoteColor) ? value.defaultNoteColor : DEFAULT_COLOR,
     defaultNotePinned: Boolean(value?.defaultNotePinned),
+    update: {
+      autoCheck: value?.update?.autoCheck !== false,
+      skippedVersion: typeof value?.update?.skippedVersion === "string"
+        ? value.update.skippedVersion.trim().slice(0, 64)
+        : "",
+    },
     shortcuts: normalizeShortcutBindings(value?.shortcuts ?? defaultShortcutBindings(platform), platform),
   };
 }

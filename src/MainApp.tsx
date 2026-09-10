@@ -2,7 +2,8 @@ import { ArrowLeft, Cloud, Folder, Hash, Plus, Power, Search, Settings, StickyNo
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MainNoteList } from "./components/MainNoteList";
 import { SettingsCenter, type SettingsSection } from "./components/settings/SettingsCenter";
-import type { NoteSummary, SyncStatus } from "./types";
+import { statusBarLabel } from "./lib/update-status";
+import type { NoteSummary, SyncStatus, UpdateSnapshot } from "./types";
 
 const noteAPI = window.noteAPI;
 
@@ -15,6 +16,7 @@ export default function MainApp() {
   const [activeView, setActiveView] = useState<"notes" | "settings">("notes");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle", message: "同步未启用" });
+  const [updateState, setUpdateState] = useState<UpdateSnapshot | null>(null);
   const [creating, setCreating] = useState(false);
   const [quitting, setQuitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -25,11 +27,14 @@ export default function MainApp() {
   useEffect(() => {
     void noteAPI.listNotes().then(setNotes);
     void noteAPI.getSyncStatus().then(setSyncStatus);
+    void noteAPI.getUpdateState().then(setUpdateState);
     const offList = noteAPI.onNoteList(setNotes);
     const offSync = noteAPI.onSyncStatus(setSyncStatus);
+    const offUpdate = noteAPI.onUpdateState(setUpdateState);
     return () => {
       offList();
       offSync();
+      offUpdate();
     };
   }, []);
 
@@ -202,6 +207,8 @@ export default function MainApp() {
     setSettingsSection(section);
     setActiveView("settings");
   }
+
+  const updateBadge = updateState ? statusBarLabel(updateState) : null;
 
   return (
     <main className={`main-shell${activeView === "settings" ? " is-settings" : ""}`}>
@@ -381,6 +388,21 @@ export default function MainApp() {
           onStatus={setSyncStatus}
         />
       )}
+
+      <footer className="main-status-bar">
+        {updateBadge?.link ? (
+          <button
+            className="main-update-link"
+            type="button"
+            onClick={() => void noteAPI.openUpdateWindow()}
+          >
+            {updateBadge.text}
+          </button>
+        ) : (
+          <span className="main-version">{updateBadge?.text ?? ""}</span>
+        )}
+        <span className="main-status-sync" title={syncStatus.message}>{syncStatus.message}</span>
+      </footer>
     </main>
   );
 }

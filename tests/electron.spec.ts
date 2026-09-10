@@ -1020,3 +1020,27 @@ test("主窗口确认退出并保存待写入内容", async () => {
     if (!exited) await app.close();
   }
 });
+
+test("主窗口状态栏可打开更新窗口", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-update-e2e-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const mainWindow = app.windows().find((page) => page.url().includes("view=main"));
+    if (!mainWindow) throw new Error("主窗口未创建");
+    await expect(mainWindow.locator(".main-status-bar")).toBeVisible();
+
+    const updateWindowCreated = app.waitForEvent("window");
+    await mainWindow.evaluate(() => window.noteAPI.openUpdateWindow());
+    const updateWindow = await updateWindowCreated;
+    expect(updateWindow.url()).toContain("view=update");
+    await expect(updateWindow.locator(".update-shell")).toBeVisible();
+    await expect(updateWindow.locator(".update-current")).toBeVisible();
+    await expect(updateWindow.locator(".update-auto-check")).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});

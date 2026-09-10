@@ -61,6 +61,13 @@ export function GeneralSettingsSection({ settings, onSettings }: GeneralSettings
           onChange={(checked) => void update("showMainOnLogin", checked)}
         />
         <SettingToggle
+          label="启动时隐藏主窗口"
+          description="启动后只保留托盘图标, 需要时从托盘打开"
+          checked={settings.startHidden}
+          disabled={busy === "startHidden"}
+          onChange={(checked) => void update("startHidden", checked)}
+        />
+        <SettingToggle
           label="关闭主窗口时隐藏到托盘"
           description="关闭后继续运行后台同步"
           checked={settings.closeMainToTray}
@@ -76,6 +83,17 @@ export function GeneralSettingsSection({ settings, onSettings }: GeneralSettings
             onChange={(checked) => void update("hideDockOnMainClose", checked)}
           />
         )}
+      </section>
+
+      <section className="settings-group" aria-labelledby="diagnostics-heading">
+        <h2 id="diagnostics-heading">排查问题</h2>
+        <SettingToggle
+          label="记录详细日志"
+          description="记录调试级别的细节, 排查完成后建议关闭"
+          checked={settings.verboseLogging}
+          disabled={busy === "verboseLogging"}
+          onChange={(checked) => void update("verboseLogging", checked)}
+        />
       </section>
 
       <section className="settings-group" aria-labelledby="note-defaults-heading">

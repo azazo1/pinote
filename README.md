@@ -15,21 +15,41 @@ just dev
 
 应用启动后先显示主窗口, 空数据不会自动创建便签. 主窗口可以搜索, 新建, 打开和删除便签, 并按分组或多个 tags 的交集筛选列表. 每张便签可以设置分组, 添加手动 tag, 或复用已有的分组和 tags. 红色关闭按钮会直接将主窗口隐藏到系统 Tray, 不退出应用; 最小化按钮保留系统原生行为. 点击 Tray 图标可以重新打开主窗口. 便签右上角的关闭按钮只关闭窗口并保留内容, 之后可以从主窗口重新打开. 删除和云同步位于便签右下角的三点菜单中.
 
+同一数据目录下只允许运行一个实例, 再次启动只会唤起已有窗口. 从终端启动时 `Ctrl+C` 会走和托盘退出相同的收尾流程, 先保存便签再退出.
+
 Markdown 编辑器会在光标所在行显示原始标记, 其他行直接显示实时排版效果. 在正文输入 `#tag` 会自动创建对应 tag, 并像 Obsidian 一样在编辑器中高亮; 从正文移除后会同步更新自动 tags. 任务列表始终显示可点击复选框并隐藏原始标记. 正文没有选区时, `Cmd/Ctrl+C/X` 会直接复制或剪切光标所在行. 首版 Emacs 光标操作包括 `Ctrl+A/E/B/F/P/N`, macOS 的 `Cmd` 快捷键保持系统原义.
 
 ## 桌面安装包
 
-electron-builder 会先从 `build/icon-source.svg` 生成各平台需要的图标, 再把 Vite 产物和 Electron 主进程代码封装为安装包.
+electron-builder 会先从 `build/icon-source.svg` 生成各平台需要的图标, 再把 Vite 产物和 Electron 主进程代码封装为发布产物.
 
 ```shell
-just dist-mac
-just dist-win
-just dist-linux
+just dist
 ```
 
-macOS 产物为 arm64 和 x64 DMG, Windows 产物为 x64 NSIS 安装器, Linux 产物为 x64 AppImage 和 deb. 文件统一写入 `release/`. 这些首版产物没有 Apple 公证或 Windows 代码签名, 安装时可能触发系统安全提示.
+`just dist` 只构建当前运行平台的自身架构, 不做交叉打包; 其他平台由 CI 的独立 runner 负责. 产物统一写入 `release/`, 命名遵循 `<app>-<version>-<platform>-<arch>.<ext>`, 例如 `pinote-0.5.0-macos-aarch64.dmg`, `pinote-0.5.0-windows-x86_64.zip` 和 `pinote-0.5.0-linux-x86_64.tar.gz` (Linux 与 Windows 归档的顶层就是便携应用目录, 客户端整目录替换). 这些首版产物没有 Apple 公证或 Windows 代码签名, 安装时可能触发系统安全提示.
 
-日常开发可以运行 `just dist` 只构建当前平台的默认目标. GitHub Actions 会在 macOS, Windows 和 Ubuntu runner 上分别执行测试与原生打包, 不使用交叉编译. 推送 `v*` tag 后会自动创建或更新 GitHub Release, 将 annotated tag 描述置于自动生成的变更列表之前, 并附加三个平台的安装包.
+打包时由 `scripts/build-version.sh` / `scripts/build-version.ps1` 从 git 推导构建版本并经 `PROJECT_BUILD_VERSION` 注入, 因此界面显示的版本会带上 commit 后缀; 直接 `just dev` 或 `just build` 的开发构建显示 `dev-build`.
+
+GitHub Actions 在 macOS (x86_64 与 aarch64), Windows (x86_64 与 aarch64), Linux (x86_64 与 aarch64) 的 runner 上分别执行测试与原生打包. 推送 `v*` tag 后会自动创建或更新 GitHub Release, 校验 tag 与 `package.json` 版本一致, 将 annotated tag 描述置于自动生成的变更列表之前, 并对全部归档生成 `SHA256SUMS`.
+
+## 自动更新
+
+安装版与便携版都会检查更新: 启动 5 秒后静默检查一次 (可在托盘菜单, 更新窗口或设置的 "关于" 页关闭), 也可以从托盘菜单, 应用菜单或状态栏主动检查. 下载走系统代理, 校验 `SHA256SUMS` 中的 SHA256 后按平台安装: Linux 在进程内替换自身目录后重启生效; Windows 与 macOS 会交接给脱离进程的替换脚本, 应用退出后再完成目录或 `.app` 替换并重新拉起.
+
+```shell
+just fake-dist
+```
+
+`just fake-dist` 复用 `just dist` 的打包路径, 但把版本固定为 `v0.0.0` 并在产物名末尾追加 `-fake`. 它使用独立的 `userData` 目录, 因此可以和正式应用同时运行, 用于端到端验证真实更新流程.
+
+## 调试与日志
+
+```shell
+just debug
+```
+
+`just debug` 以项目内的 `target/pinote-debug/` 作为数据目录启动调试实例, 与日常数据隔离, 同时把日志级别提到最详细档. 日志文件默认位于数据目录的 `logs/pinote.log`, 按每日与单文件大小轮转并限制留存数量, 可用 `PINOTE_LOG_FILE` 与 `PINOTE_LOG_LEVEL` 覆盖. 设置中的 "记录详细日志" 可以临时打开调试级别, 排查完成后建议关闭.
 
 ## 自托管同步
 

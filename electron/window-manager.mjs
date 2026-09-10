@@ -1,13 +1,11 @@
 import { BrowserWindow, screen } from "electron";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
+import { loadRenderer, rendererPreferences } from "./renderer-host.mjs";
 import { isPointNearBounds, SHELF_DOCK_PROXIMITY } from "./windowing/shelf-proximity.mjs";
 import { snapBounds } from "./windowing/snap-bounds.mjs";
 import { shelfWorkspaceLayout } from "./windowing/shelf-workspace-bounds.mjs";
 
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const COLLAPSED_HEIGHT = 22;
 const COLLAPSED_WIDTH = 253;
 const SHELF_COLLAPSED_SIZE = 36;
@@ -1698,11 +1696,7 @@ export class WindowManager {
   }
 
   loadRenderer(window, query) {
-    if (process.env.VITE_DEV_SERVER_URL) {
-      void window.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${new URLSearchParams(query)}`);
-    } else {
-      void window.loadFile(path.join(currentDir, "..", "dist", "index.html"), { query });
-    }
+    loadRenderer(window, query);
   }
 }
 
@@ -1716,15 +1710,6 @@ function interpolateBounds(start, target, progress) {
     y: Math.round(start.y + (target.y - start.y) * progress),
     width: Math.round(start.width + (target.width - start.width) * progress),
     height: Math.round(start.height + (target.height - start.height) * progress),
-  };
-}
-
-function rendererPreferences() {
-  return {
-    preload: path.join(currentDir, "preload.cjs"),
-    contextIsolation: true,
-    nodeIntegration: false,
-    sandbox: true,
   };
 }
 

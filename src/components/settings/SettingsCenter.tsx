@@ -71,7 +71,7 @@ export function SettingsCenter({ section, status, onSection, onStatus }: Setting
             </section>
           </div>
         ) : (
-          <AboutSettingsSection info={info} />
+          <AboutSettingsSection info={info} settings={settings.general} onSettings={setSettings} />
         )}
       </div>
     </section>

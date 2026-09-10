@@ -200,7 +200,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(9);
+    expect(restored.state.version).toBe(10);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -256,7 +256,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(9);
+    expect(restored.state.version).toBe(10);
     expect(restored.getShelfPlacement(101)).toEqual({ x: 1, y: 0.32, edge: "right" });
     expect(restored.state.shelf).not.toHaveProperty("positions");
   });
@@ -524,7 +524,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(9);
+    expect(restored.state.version).toBe(10);
     expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [], archivedAt: null });
   });
 
@@ -539,7 +539,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath, "linux");
     await restored.load();
 
-    expect(restored.state.version).toBe(9);
+    expect(restored.state.version).toBe(10);
     expect(restored.getPreferences()).toMatchObject({
       showMainOnLogin: true,
       closeMainToTray: true,
@@ -576,5 +576,29 @@ describe("NoteStore", () => {
     await restored.load();
 
     expect(restored.getPreferences().hideDockOnMainClose).toBe(true);
+  });
+
+  it("persists update settings and start-hidden preference", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath);
+    await store.load();
+    expect(store.getPreferences()).toMatchObject({
+      startHidden: false,
+      verboseLogging: false,
+      update: { autoCheck: true, skippedVersion: "" },
+    });
+
+    store.updatePreferences({ startHidden: true, verboseLogging: true });
+    store.updatePreferences({ update: { skippedVersion: "0.6.0" } });
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.getPreferences()).toMatchObject({
+      startHidden: true,
+      verboseLogging: true,
+      update: { autoCheck: true, skippedVersion: "0.6.0" },
+    });
   });
 });
