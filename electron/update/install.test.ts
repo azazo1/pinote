@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { shellSingleQuote } from "./escaping.mjs";
 import { buildMacApplyScript } from "./install-macos.mjs";
 import { buildWindowsApplyScript } from "./install-windows.mjs";
 import {
+  applyPaths,
+  assertSafeApplyPaths,
   isDirectoryWritable,
   moveDirectory,
   resolveAppLayout,
@@ -20,7 +25,12 @@ describe("shellSingleQuote", () => {
 describe("resolveAppLayout", () => {
   it("识别 macOS .app 包", () => {
     expect(resolveAppLayout({ execPath: "/Applications/Pinote.app/Contents/MacOS/Pinote", platform: "darwin" }))
-      .toMatchObject({ kind: "macos-bundle", bundlePath: "/Applications/Pinote.app", appDir: "/Applications" });
+      .toMatchObject({
+        kind: "macos-bundle",
+        bundlePath: "/Applications/Pinote.app",
+        appDir: "/Applications",
+        targetPath: "/Applications/Pinote.app",
+      });
   });
 
   it("识别便携运行与 AppImage", () => {
@@ -31,7 +41,49 @@ describe("resolveAppLayout", () => {
       env: { APPIMAGE: "/home/u/Pinote.AppImage" },
     })).toMatchObject({ kind: "appimage", appImagePath: "/home/u/Pinote.AppImage" });
     expect(resolveAppLayout({ execPath: "/home/u/pinote/pinote", platform: "linux", env: {} }))
-      .toMatchObject({ kind: "portable-directory", appDir: "/home/u/pinote" });
+      .toMatchObject({ kind: "portable-directory", appDir: "/home/u/pinote", targetPath: "/home/u/pinote" });
+  });
+});
+
+describe("applyPaths", () => {
+  let userDataPath: string;
+
+  beforeEach(() => {
+    userDataPath = mkdtempSync(path.join(tmpdir(), "pinote-apply-paths-"));
+  });
+
+  afterEach(() => {
+    rmSync(userDataPath, { recursive: true, force: true });
+  });
+
+  it("macOS 的暂存与备份落在应用包同级, 不退到根目录", () => {
+    const paths = applyPaths({ userDataPath, targetPath: "/Applications/Pinote.app", version: "v0.6.0" });
+
+    expect(paths.staging).toBe("/Applications/.Pinote.app.update-0.6.0");
+    expect(paths.backup).toBe("/Applications/Pinote.app.old");
+  });
+
+  it("linux 沿用应用目录同级的路径", () => {
+    expect(applyPaths({ userDataPath, targetPath: "/opt/pinote", version: "v0.6.0" }))
+      .toMatchObject({ staging: "/opt/.pinote.update-0.6.0", backup: "/opt/pinote.old" });
+  });
+});
+
+describe("assertSafeApplyPaths", () => {
+  it("接受与替换目标同级的暂存与备份", () => {
+    expect(assertSafeApplyPaths({
+      targetPath: "/Applications/Pinote.app",
+      stagingPath: "/Applications/.Pinote.app.update-0.6.0",
+      backupPath: "/Applications/Pinote.app.old",
+    })).toBe(true);
+  });
+
+  it("拒绝退到父目录的备份, 避免整目录被改名删除", () => {
+    expect(() => assertSafeApplyPaths({
+      targetPath: "/Applications/Pinote.app",
+      stagingPath: "/.Applications.update-0.6.0",
+      backupPath: "/Applications.old",
+    })).toThrow(/替换路径不安全/);
   });
 });
 
@@ -100,6 +152,25 @@ describe("替换脚本内容", () => {
     expect(script).toContain("xattr -dr com.apple.quarantine");
     expect(script).toContain('mv "$BUNDLE" "$BACKUP"');
     expect(script).toContain('open "$BUNDLE"');
+  });
+
+  it("macOS 脚本把外部命令的报错写进替换日志", () => {
+    const script = buildMacApplyScript({
+      pid: 42,
+      bundlePath: "/Applications/Pinote.app",
+      dmgPath: "/data/update/pinote-0.6.0-macos-aarch64.dmg",
+      stagingPath: "/Applications/.Pinote.app.update-0.6.0",
+      backupPath: "/Applications/Pinote.app.old",
+      mountPath: "/data/update/mount-1",
+      logPath: "/data/update/apply-update.log",
+      resultPath: "/data/update/apply-update-result.txt",
+    });
+
+    expect(script).toContain('ditto "$SOURCE_APP" "$STAGING" >> "$LOG" 2>&1');
+    expect(script).toContain('hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" >> "$LOG" 2>&1');
+    expect(script).toContain('"$BUNDLE_DIR"/.*)');
+    expect(script).toContain('"$BUNDLE".old)');
+    expect(script).toContain('MOVED=0');
   });
 
   it("windows 脚本等待旧进程, 目标不可写时给出可读原因", () => {

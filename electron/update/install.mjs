@@ -20,6 +20,10 @@ export function updateDirectory(userDataPath) {
 }
 
 // 判断当前可执行文件的运行形态, 替换策略据此决定.
+//
+// targetPath 是真正被替换的那个条目: macOS 是 .app 包本身, 其余平台是应用目录.
+// 暂存与备份一律按 targetPath 的同级条目计算, 不能取 appDir 的父目录 --
+// 对 macOS 而言 appDir 已经是 /Applications, 再往上取一层会落到只读的根卷.
 export function resolveAppLayout({ execPath, platform = process.platform, env = process.env }) {
   if (platform === "darwin") {
     const matched = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath);
@@ -29,14 +33,28 @@ export function resolveAppLayout({ execPath, platform = process.platform, env = 
         executable: execPath,
         bundlePath: matched[1],
         appDir: path.dirname(matched[1]),
+        targetPath: matched[1],
       };
     }
-    return { kind: "portable", executable: execPath, bundlePath: null, appDir: path.dirname(execPath) };
+    return {
+      kind: "portable",
+      executable: execPath,
+      bundlePath: null,
+      appDir: path.dirname(execPath),
+      targetPath: execPath,
+    };
   }
   if (platform === "linux" && env.APPIMAGE) {
-    return { kind: "appimage", executable: execPath, appImagePath: env.APPIMAGE, appDir: path.dirname(env.APPIMAGE) };
+    return {
+      kind: "appimage",
+      executable: execPath,
+      appImagePath: env.APPIMAGE,
+      appDir: path.dirname(env.APPIMAGE),
+      targetPath: env.APPIMAGE,
+    };
   }
-  return { kind: "portable-directory", executable: execPath, appDir: path.dirname(execPath) };
+  const appDir = path.dirname(execPath);
+  return { kind: "portable-directory", executable: execPath, appDir, targetPath: appDir };
 }
 
 export function isDirectoryWritable(directory, access = accessSync) {
@@ -67,9 +85,26 @@ export function resolveInstallPlan({ platform = process.platform, layout, direct
   };
 }
 
-function stagingPathFor(appDir, version) {
-  const name = `.${path.basename(appDir)}.update-${normalizeVersion(version) || "latest"}`;
-  return path.join(path.dirname(appDir), name);
+// 暂存目录必须与替换目标同级同卷, 最后一步才能用 rename 就位.
+function stagingPathFor(targetPath, version) {
+  const name = `.${path.basename(targetPath)}.update-${normalizeVersion(version) || "latest"}`;
+  return path.join(path.dirname(targetPath), name);
+}
+
+// 替换脚本会改名并删除这些路径, 生成脚本前先确认它们的形状符合预期:
+// 任何一个退化成父目录本身, 都会在替换时把同级内容一起删掉.
+export function assertSafeApplyPaths({ targetPath, stagingPath, backupPath }) {
+  const parent = path.dirname(targetPath);
+  const problems = [];
+  if (stagingPath === targetPath || backupPath === targetPath) problems.push("暂存或备份路径与替换目标重合");
+  if (path.dirname(stagingPath) !== parent) problems.push("暂存路径不在替换目标的同级目录");
+  if (path.dirname(backupPath) !== parent) problems.push("备份路径不在替换目标的同级目录");
+  if (backupPath !== `${targetPath}${BACKUP_SUFFIX}`) problems.push("备份路径命名不符合约定");
+  if (!path.basename(stagingPath).startsWith(".")) problems.push("暂存路径应是同级目录下的隐藏条目");
+  if (problems.length > 0) {
+    throw new UpdateError(`替换路径不安全: ${problems.join(", ")}`, { kind: UPDATE_ERROR_KINDS.fileSystem });
+  }
+  return true;
 }
 
 // rename 允许把正在运行的可执行文件改名让位, 但跨文件系统时会失败 (EXDEV),
@@ -125,13 +160,13 @@ export async function swapApplicationDirectory({
   }
 }
 
-export function applyPaths({ userDataPath, appDir, version }) {
+export function applyPaths({ userDataPath, targetPath, version }) {
   const directory = updateDirectory(userDataPath);
   mkdirSync(directory, { recursive: true });
   return {
     directory,
-    staging: stagingPathFor(appDir, version),
-    backup: `${appDir}${BACKUP_SUFFIX}`,
+    staging: stagingPathFor(targetPath, version),
+    backup: `${targetPath}${BACKUP_SUFFIX}`,
     log: path.join(directory, APPLY_LOG_FILE),
     result: path.join(directory, APPLY_RESULT_FILE),
   };
@@ -148,9 +183,9 @@ export async function applyUpdate({
   log = () => {},
 }) {
   const layout = resolveAppLayout({ execPath, platform, env });
-  const directoryWritable = isDirectoryWritable(path.dirname(layout.appDir));
+  const directoryWritable = isDirectoryWritable(path.dirname(layout.targetPath));
   const plan = resolveInstallPlan({ platform, layout, directoryWritable });
-  const paths = applyPaths({ userDataPath, appDir: layout.appDir, version });
+  const paths = applyPaths({ userDataPath, targetPath: layout.targetPath, version });
 
   // 开发构建直接跑 electron 可执行文件, 替换它会破坏开发环境, 只提示不安装.
   if (!packaged) {
@@ -164,6 +199,9 @@ export async function applyUpdate({
     return { state: "manual", message: plan.reason, artifactPath: archivePath };
   }
 
+  // 从这里开始会真实改动磁盘, 先确认暂存与备份路径的形状.
+  assertSafeApplyPaths({ targetPath: layout.targetPath, stagingPath: paths.staging, backupPath: paths.backup });
+
   if (plan.strategy === "macos-handoff") {
     const mountPath = path.join(paths.directory, `mount-${Date.now()}`);
     const script = buildMacApplyScript({
@@ -176,7 +214,7 @@ export async function applyUpdate({
       logPath: paths.log,
       resultPath: paths.result,
     });
-    startMacHandoff({ scriptPath: path.join(paths.directory, MAC_SCRIPT_NAME), script });
+    startMacHandoff({ scriptPath: path.join(paths.directory, MAC_SCRIPT_NAME), script, logPath: paths.log });
     log("已交接给替换脚本, 应用将退出后完成替换");
     return {
       state: "handed-off",
@@ -198,7 +236,7 @@ export async function applyUpdate({
       logPath: paths.log,
       resultPath: paths.result,
     });
-    startWindowsHandoff({ scriptPath: path.join(paths.directory, WINDOWS_SCRIPT_NAME), script });
+    startWindowsHandoff({ scriptPath: path.join(paths.directory, WINDOWS_SCRIPT_NAME), script, logPath: paths.log });
     log("已交接给替换脚本, 应用将退出后完成替换");
     return {
       state: "handed-off",
@@ -258,10 +296,9 @@ export function cleanupUpdateArtifacts({
   log = () => {},
 }) {
   const layout = resolveAppLayout({ execPath, platform, env });
-  const parent = path.dirname(layout.appDir);
-  const prefix = path.basename(layout.appDir);
-  removeQuietly(`${layout.appDir}${BACKUP_SUFFIX}`, remove);
-  if (layout.bundlePath) removeQuietly(`${layout.bundlePath}${BACKUP_SUFFIX}`, remove);
+  const parent = path.dirname(layout.targetPath);
+  const prefix = path.basename(layout.targetPath);
+  removeQuietly(`${layout.targetPath}${BACKUP_SUFFIX}`, remove);
 
   let siblings = [];
   try {
