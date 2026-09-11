@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UpdateService } from "./update-service.mjs";
+import { UPDATE_ERROR_KINDS, UpdateError } from "./update/errors.mjs";
 
 const VERSION = "v0.9.0";
 const ASSET_NAME = `pinote-0.9.0-linux-x86_64.tar.gz`;
@@ -48,7 +49,7 @@ function fakeStore(preferences = {}) {
   };
 }
 
-function fakeClient({ checksums, body = null, failCheck = null }) {
+function fakeClient({ checksums, body = null, failCheck = null, hangDownload = false }) {
   return () => ({
     async getText(url) {
       if (failCheck) throw failCheck;
@@ -68,9 +69,17 @@ function fakeClient({ checksums, body = null, failCheck = null }) {
         headers: {},
       };
     },
-    async download(url, { filePath, append }) {
+    download(url, { filePath, append, signal }) {
+      if (hangDownload) {
+        // 模拟长时间下载: 只有收到取消信号才结束.
+        return new Promise((_resolve, reject) => {
+          const abort = () => reject(new UpdateError("下载已取消", { kind: UPDATE_ERROR_KINDS.cancelled }));
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
       writeFileSync(filePath, body ?? readFileSync(archive), { flag: append ? "a" : "w" });
-      return { status: 200, received: readFileSync(archive).length, total: readFileSync(archive).length };
+      return Promise.resolve({ status: 200, received: readFileSync(archive).length, total: readFileSync(archive).length });
     },
   });
 }
@@ -120,7 +129,8 @@ describe("UpdateService", () => {
     });
 
     const installed = await service.startDownload();
-    expect(installed.state).toBe("ready-to-restart");
+    expect(installed.state).toBe("downloading");
+    await expect(service.waitForDownload()).resolves.toMatchObject({ state: "ready-to-restart" });
     expect(execFileSync(path.join(appDir, "pinote"), { encoding: "utf8" })).toContain("0.9.0");
     service.dispose();
   });
@@ -132,10 +142,24 @@ describe("UpdateService", () => {
     service.initialize();
     await service.checkForUpdates({ manual: true });
 
-    const state = await service.startDownload();
+    service.startDownload();
+    const state = await service.waitForDownload();
     expect(state.state).toBe("failed");
     expect(state.error.message).toContain("校验失败");
     expect(readFileSync(path.join(appDir, "pinote"), "utf8")).toContain("0.5.0");
+    service.dispose();
+  });
+
+  it("下载期间可以取消", async () => {
+    const service = createService({
+      createClient: fakeClient({ checksums: checksumsFor(archive), hangDownload: true }),
+    });
+    service.initialize();
+    await service.checkForUpdates({ manual: true });
+
+    expect(service.startDownload()).toMatchObject({ state: "downloading" });
+    expect(service.cancelDownload()).toBe(true);
+    await expect(service.waitForDownload()).resolves.toMatchObject({ state: "available", progress: null });
     service.dispose();
   });
 

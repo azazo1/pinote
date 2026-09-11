@@ -315,6 +315,7 @@ function registerIpc() {
   ipcMain.handle("app:get-info", () => getAppInfo());
   ipcMain.handle("update:get-state", () => updateService.getState());
   ipcMain.handle("update:check", () => updateService.checkForUpdates({ manual: true }));
+  // 下载由服务在后台推进, 这里立刻回快照, 让界面在下载期间仍能点击 "取消更新".
   ipcMain.handle("update:download", () => updateService.startDownload());
   ipcMain.handle("update:cancel", () => updateService.cancelDownload());
   ipcMain.handle("update:skip", () => updateService.skipLatestVersion());

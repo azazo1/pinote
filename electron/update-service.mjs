@@ -20,6 +20,7 @@ export class UpdateService {
   #asset = null;
   #checksumsAsset = null;
   #downloadController = null;
+  #downloadTask = null;
   #restartExecutable = null;
   #silentCheckTimer = null;
   #lastProgressAt = 0;
@@ -177,7 +178,30 @@ export class UpdateService {
     return this.getState();
   }
 
-  async startDownload() {
+  // 立即返回启动后的快照, 下载与安装在后台推进.
+  // 如果在这里等待整个下载, UI 的调用会被挂住, 下载期间用户将无法点击 "取消更新".
+  startDownload() {
+    if (this.#snapshot.state !== UPDATE_STATES.available) return this.getState();
+    if (this.#downloadTask) return this.getState();
+    this.#downloadTask = this.#performDownload()
+      .catch((error) => {
+        this.log.error("更新下载任务异常结束", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.#downloadTask = null;
+      });
+    return this.getState();
+  }
+
+  // 等待后台下载任务结束, 主要供测试使用.
+  async waitForDownload() {
+    await this.#downloadTask;
+    return this.getState();
+  }
+
+  async #performDownload() {
     if (this.#snapshot.state !== UPDATE_STATES.available) return this.getState();
     if (!this.#asset || !this.#checksumsAsset) {
       await this.checkForUpdates({ manual: true });
