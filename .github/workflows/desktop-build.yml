@@ -64,7 +64,7 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
 
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release_context.outputs.source_ref }}
           fetch-depth: 0
@@ -115,7 +115,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -127,7 +127,7 @@ jobs:
           bun-version: latest
 
       - name: 恢复 bun 依赖缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-x86_64-${{ hashFiles('bun.lock') }}
@@ -177,7 +177,7 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -189,7 +189,7 @@ jobs:
           bun-version: latest
 
       - name: 恢复 bun 依赖缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('bun.lock') }}
@@ -232,7 +232,7 @@ jobs:
           test -x "$mount_point/Pinote.app/Contents/MacOS/Pinote"
 
       - name: 上传平台产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pinote-${{ needs.version.outputs.build_version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: release/
@@ -249,14 +249,14 @@ jobs:
       contents: write
     steps:
       - name: 检出发布 tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: 下载全部平台产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pinote-*
           path: release-artifacts
