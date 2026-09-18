@@ -4,7 +4,7 @@ import path from "node:path";
 import log from "electron-log/main.js";
 import { defaultShortcutBindings, normalizeShortcutBindings } from "./shortcut-settings.mjs";
 
-const CURRENT_VERSION = 10;
+const CURRENT_VERSION = 11;
 const DEFAULT_COLOR = "lemon";
 const NOTE_COLORS = new Set(["lemon", "mint", "coral", "sky", "paper"]);
 const DEFAULT_SHELF_PLACEMENT = Object.freeze({ x: 1, y: 0.5, edge: "right" });
@@ -52,6 +52,7 @@ export class NoteStore {
     const windowState = this.getWindowState(id);
     return {
       ...note,
+      localOnly: this.isLocalOnly(id),
       collapsed: windowState.collapsed,
       pinned: windowState.pinned,
       open: windowState.open,
@@ -71,6 +72,7 @@ export class NoteStore {
         tags: note.tags,
         archivedAt: note.archivedAt,
         modifiedAt: note.modifiedAt,
+        localOnly: this.isLocalOnly(note.id),
         open: this.getWindowState(note.id).open,
         pinned: this.getWindowState(note.id).pinned,
         dockState: this.getWindowState(note.id).dockState,
@@ -145,10 +147,27 @@ export class NoteStore {
     return this.draftIds.has(id);
   }
 
+  isLocalOnly(id) {
+    return this.state.localOnlyIds.includes(id);
+  }
+
+  setLocalOnly(id, localOnly) {
+    const note = this.getNote(id);
+    if (!note) return null;
+    if (this.isLocalOnly(id) === Boolean(localOnly)) return this.getRenderableNote(id);
+    this.state.localOnlyIds = localOnly
+      ? [...this.state.localOnlyIds, id]
+      : this.state.localOnlyIds.filter((item) => item !== id);
+    void this.save();
+    log.info(localOnly ? "便签已设为仅本地" : "便签已恢复云同步", { id });
+    return this.getRenderableNote(id);
+  }
+
   discardDraft(id) {
     if (!this.draftIds.delete(id)) return false;
     this.state.notes = this.state.notes.filter((item) => item.id !== id);
     delete this.state.windows[id];
+    this.state.localOnlyIds = this.state.localOnlyIds.filter((item) => item !== id);
     void this.save();
     log.info("已丢弃未编辑便签", { id });
     return true;
@@ -226,17 +245,22 @@ export class NoteStore {
     if (this.discardDraft(id)) return true;
     const note = this.getNote(id);
     if (!note) return false;
+    const wasLocalOnly = this.isLocalOnly(id);
     this.state.notes = this.state.notes.filter((item) => item.id !== id);
     delete this.state.windows[id];
-    this.state.deleted = this.state.deleted.filter((item) => item.id !== id);
-    this.state.deleted.push({
-      id,
-      baseRevision: note.revision,
-      deletedAt: Date.now(),
-      dirty: true,
-    });
+    this.state.localOnlyIds = this.state.localOnlyIds.filter((item) => item !== id);
+    // 仅本地便签的删除是纯本地操作, 不向云端广播 tombstone.
+    if (!wasLocalOnly) {
+      this.state.deleted = this.state.deleted.filter((item) => item.id !== id);
+      this.state.deleted.push({
+        id,
+        baseRevision: note.revision,
+        deletedAt: Date.now(),
+        dirty: true,
+      });
+    }
     void this.save();
-    log.info("已删除便签", { id, baseRevision: note.revision });
+    log.info("已删除便签", { id, baseRevision: note.revision, localOnly: wasLocalOnly });
     return true;
   }
 
@@ -280,7 +304,7 @@ export class NoteStore {
   buildSyncRequest() {
     return {
       deviceId: this.state.deviceId,
-      changes: this.state.notes.filter((note) => note.dirty && !this.isDraft(note.id)).map((note) => ({
+      changes: this.state.notes.filter((note) => note.dirty && !this.isDraft(note.id) && !this.isLocalOnly(note.id)).map((note) => ({
         id: note.id,
         title: note.title,
         markdown: note.markdown,
@@ -325,6 +349,13 @@ export class NoteStore {
     }
 
     for (const local of localNotes.values()) {
+      // 仅本地便签与云端完全解耦: 无论 dirty 与否都原样保留, 不被远端覆盖或当作已删除.
+      if (this.isLocalOnly(local.id)) {
+        nextNotes.push(local);
+        suppressedRemoteIds.add(local.id);
+        continue;
+      }
+
       const remote = remoteNotes.get(local.id);
       const sentChange = sentChanges.get(local.id);
       const sentVersionUnchanged = local.dirty && sentChange && contentMatchesChange(local, sentChange);
@@ -362,7 +393,8 @@ export class NoteStore {
     return {
       conflicts: Array.isArray(snapshot.conflicts) ? snapshot.conflicts.filter(isRemoteNote).map((note) => note.id) : [],
       notes: nextNotes.length,
-      pending: nextNotes.some((note) => note.dirty) || this.state.deleted.some((item) => item.dirty),
+      pending: nextNotes.some((note) => note.dirty && !this.isLocalOnly(note.id))
+        || this.state.deleted.some((item) => item.dirty),
     };
   }
 
@@ -392,6 +424,7 @@ function createEmptyState(platform = process.platform) {
     notes: [],
     windows: {},
     deleted: [],
+    localOnlyIds: [],
     shelf: { displayId: null, placements: {} },
     sync: { url: "", encryptedToken: "" },
     preferences: normalizePreferences({}, platform),
@@ -423,12 +456,14 @@ function normalizeState(value, platform = process.platform) {
         : "free",
     });
   }
+  const noteIds = new Set(notes.map((note) => note.id));
   return {
     version: CURRENT_VERSION,
     deviceId,
     notes,
     windows,
     deleted: Array.isArray(value?.deleted) ? value.deleted.filter(isLocalDeletion).map((item) => ({ ...item, dirty: item.dirty !== false })) : [],
+    localOnlyIds: normalizeLocalOnlyIds(value?.localOnlyIds, noteIds),
     shelf: normalizeShelfState(value?.shelf),
     sync: {
       url: typeof value?.sync?.url === "string" ? value.sync.url : "",
@@ -436,6 +471,16 @@ function normalizeState(value, platform = process.platform) {
     },
     preferences: normalizePreferences(value?.preferences, platform),
   };
+}
+
+function normalizeLocalOnlyIds(value, noteIds) {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set();
+  for (const item of value) {
+    if (typeof item !== "string" || !noteIds.has(item)) continue;
+    ids.add(item);
+  }
+  return [...ids];
 }
 
 function normalizePreferences(value, platform) {

@@ -730,6 +730,12 @@ export class WindowManager {
     return updated;
   }
 
+  setNoteLocalOnly(id, localOnly) {
+    const updated = this.store.setLocalOnly(id, Boolean(localOnly));
+    this.broadcastNoteList();
+    return updated;
+  }
+
   applyPinnedLevel(window, pinned) {
     window.setAlwaysOnTop(Boolean(pinned), "floating");
   }

@@ -184,5 +184,6 @@ function createNote(id: string, title: string): NoteSummary {
     open: true,
     pinned: false,
     dockState: "shelf",
+    localOnly: false,
   };
 }

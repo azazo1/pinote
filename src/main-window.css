@@ -524,6 +524,18 @@
   border-radius: 50%;
 }
 
+.main-note-local {
+  flex: none;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 2px;
+  color: #7d6a8f;
+  background: #efeaf3;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
 .main-note-excerpt {
   min-width: 0;
   overflow: hidden;

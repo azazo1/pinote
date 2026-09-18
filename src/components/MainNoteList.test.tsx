@@ -53,5 +53,6 @@ function activeNote(): NoteSummary {
     open: false,
     pinned: false,
     dockState: "free",
+    localOnly: false,
   };
 }

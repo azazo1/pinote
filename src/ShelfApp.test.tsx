@@ -128,5 +128,6 @@ function noteSummary(id: string, title: string): NoteSummary {
     open: true,
     pinned: false,
     dockState: "shelf" as const,
+    localOnly: false,
   };
 }

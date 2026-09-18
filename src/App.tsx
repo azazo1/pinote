@@ -66,6 +66,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
   const inlineTagsRef = useRef<string[]>([]);
   const collapsedRef = useRef(false);
   const archivedRef = useRef(false);
+  const localOnlyRef = useRef(false);
   const noteLoadedRef = useRef(false);
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<NoteEditorHandle>(null);
@@ -73,6 +74,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
 
   collapsedRef.current = note?.collapsed ?? false;
   archivedRef.current = note?.archivedAt != null;
+  localOnlyRef.current = note?.localOnly ?? false;
   noteLoadedRef.current = note !== null;
 
   const setCurrentInlineTags = useCallback((tags: string[]) => {
@@ -271,6 +273,15 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
     if (!noteLoadedRef.current) return;
     void setArchived(!archivedRef.current);
   }, [setArchived]);
+
+  const toggleLocalOnly = useCallback(() => {
+    if (!noteLoadedRef.current) return;
+    void window.noteAPI.setNoteLocalOnly(noteId, !localOnlyRef.current).then((updated) => {
+      if (!updated) return;
+      contentRevision.current = updated.revision;
+      setNote(updated);
+    });
+  }, [noteId]);
 
   const focusAfterExpand = useCallback((focus: () => void) => {
     if (!collapsedRef.current) {
@@ -490,6 +501,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
           <NoteMenu
             archived={note.archivedAt !== null}
             onToggleArchive={toggleArchive}
+            localOnly={note.localOnly}
+            onToggleLocalOnly={toggleLocalOnly}
             onCreate={() => void window.noteAPI.createNote()}
             onOpenColorPicker={toggleColorPicker}
             onOpenMainWindow={() => void window.noteAPI.openMainWindow()}

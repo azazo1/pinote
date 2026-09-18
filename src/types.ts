@@ -14,6 +14,7 @@ export interface Note {
   pinned: boolean;
   open: boolean;
   dockState: DockState;
+  localOnly: boolean;
 }
 
 export interface NoteSummary {
@@ -28,6 +29,7 @@ export interface NoteSummary {
   open: boolean;
   pinned: boolean;
   dockState: DockState;
+  localOnly: boolean;
 }
 
 export type DockState = "free" | "shelf" | "inline";
@@ -190,6 +192,7 @@ export interface NoteAPI {
   openNote: (id: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;
   setNoteArchived: (id: string, archived: boolean) => Promise<Note | null>;
+  setNoteLocalOnly: (id: string, localOnly: boolean) => Promise<Note | null>;
   openMainWindow: () => Promise<boolean>;
   requestQuit: () => Promise<boolean>;
   toggleCollapse: (id: string) => Promise<void>;

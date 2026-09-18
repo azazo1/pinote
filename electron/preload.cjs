@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   closeNote: (id) => ipcRenderer.invoke("note:close", id),
   deleteNote: (id) => ipcRenderer.invoke("note:delete", id),
   setNoteArchived: (id, archived) => ipcRenderer.invoke("note:set-archived", id, archived),
+  setNoteLocalOnly: (id, localOnly) => ipcRenderer.invoke("note:set-local-only", id, localOnly),
   openMainWindow: () => ipcRenderer.invoke("window:open-main"),
   requestQuit: () => ipcRenderer.invoke("app:request-quit"),
   toggleCollapse: (id) => ipcRenderer.invoke("window:toggle-collapse", id),

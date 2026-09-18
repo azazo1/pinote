@@ -64,6 +64,7 @@ function MainNoteRow({ note, deleting, updating, onOpen, onSetArchived, onDelete
           <span className="main-note-title-line">
             <strong>{note.title || "无标题"}</strong>
             {note.pinned && <Pin className="main-note-pin" size={12} aria-label="已置顶" />}
+            {note.localOnly && <span className="main-note-local" title="仅保存在本机, 不参与云同步">仅本地</span>}
             {note.open && <span className="main-note-open-state" title="窗口已打开" aria-label="窗口已打开" />}
           </span>
           <span className={`main-note-excerpt${excerpt ? "" : " is-empty"}`}>{excerpt || "空白便签"}</span>

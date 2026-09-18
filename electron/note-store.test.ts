@@ -200,7 +200,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(10);
+    expect(restored.state.version).toBe(11);
     expect(restored.state).not.toHaveProperty("groupDocked");
     expect(restored.state).not.toHaveProperty("dockMode");
     expect(restored.getDockState(first.id)).toBe("inline");
@@ -256,7 +256,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(10);
+    expect(restored.state.version).toBe(11);
     expect(restored.getShelfPlacement(101)).toEqual({ x: 1, y: 0.32, edge: "right" });
     expect(restored.state.shelf).not.toHaveProperty("positions");
   });
@@ -482,6 +482,118 @@ describe("NoteStore", () => {
     await store.save();
   });
 
+  it("keeps a local-only note out of sync requests and pending state", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { title: "仅本地", markdown: "内容不上传" });
+    expect(store.setLocalOnly(note.id, true)).toMatchObject({ localOnly: true });
+
+    const request = store.buildSyncRequest();
+    expect(request.changes).toEqual([]);
+
+    const result = store.applySyncResponse({ notes: [], deleted: [], conflicts: [] }, request);
+    expect(result.pending).toBe(false);
+    expect(store.getNote(note.id)).toMatchObject({ title: "仅本地", dirty: true });
+    await store.save();
+  });
+
+  it("does not let a remote copy overwrite a local-only note", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { title: "本地版本" });
+    const request = store.buildSyncRequest();
+    store.applySyncResponse({ notes: [{ ...request.changes[0], revision: 1 }], deleted: [], conflicts: [] }, request);
+    store.setLocalOnly(note.id, true);
+    store.updateContent(note.id, { title: "仅本地新标题" });
+
+    const remote = {
+      ...store.getNote(note.id),
+      title: "远端旧标题",
+      revision: 2,
+      modifiedAt: Date.now() + 5,
+      modifiedBy: "remote-device",
+      dirty: undefined,
+    };
+    const result = store.applySyncResponse({ notes: [remote], deleted: [], conflicts: [] }, store.buildSyncRequest());
+
+    expect(store.getNote(note.id)).toMatchObject({ title: "仅本地新标题", revision: 1 });
+    expect(result.pending).toBe(false);
+    await store.save();
+  });
+
+  it("uploads a note again after local-only is turned off", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.setLocalOnly(note.id, true);
+    store.updateContent(note.id, { title: "离线编辑" });
+    expect(store.buildSyncRequest().changes).toEqual([]);
+
+    store.setLocalOnly(note.id, false);
+    expect(store.buildSyncRequest().changes).toEqual([
+      expect.objectContaining({ id: note.id, title: "离线编辑" }),
+    ]);
+    await store.save();
+  });
+
+  it("deletes a local-only note without creating a tombstone", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { title: "待删除" });
+    const request = store.buildSyncRequest();
+    store.applySyncResponse({ notes: [{ ...request.changes[0], revision: 1 }], deleted: [], conflicts: [] }, request);
+    store.setLocalOnly(note.id, true);
+
+    expect(store.deleteNote(note.id)).toBe(true);
+    expect(store.getNote(note.id)).toBeNull();
+    expect(store.state.deleted).toEqual([]);
+    await store.save();
+  });
+
+  it("keeps a locally deleted remote copy from removing a local-only note", async () => {
+    const store = testStore();
+    await store.load();
+    const note = store.createNote();
+    store.updateContent(note.id, { title: "本地保留" });
+    const request = store.buildSyncRequest();
+    store.applySyncResponse({ notes: [{ ...request.changes[0], revision: 1 }], deleted: [], conflicts: [] }, request);
+    store.setLocalOnly(note.id, true);
+
+    const result = store.applySyncResponse({
+      notes: [],
+      deleted: [{ id: note.id, revision: 2, deletedAt: Date.now() }],
+      conflicts: [],
+    }, store.buildSyncRequest());
+
+    expect(store.getNote(note.id)).toMatchObject({ title: "本地保留" });
+    expect(result.pending).toBe(false);
+    await store.save();
+  });
+
+  it("persists local-only ids across restarts", async () => {
+    const dataPath = testStorePath();
+    const first = new NoteStore(dataPath);
+    await first.load();
+    const note = first.createNote();
+    first.setLocalOnly(note.id, true);
+    const untouched = first.createNote();
+    await first.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+
+    expect(restored.isLocalOnly(note.id)).toBe(true);
+    expect(restored.isLocalOnly(untouched.id)).toBe(false);
+    expect(restored.listSummaries()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: note.id, localOnly: true }),
+      expect.objectContaining({ id: untouched.id, localOnly: false }),
+    ]));
+    await restored.save();
+  });
+
   it("normalizes group and tags as synchronized content", async () => {
     const store = testStore();
     await store.load();
@@ -524,7 +636,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath);
     await restored.load();
 
-    expect(restored.state.version).toBe(10);
+    expect(restored.state.version).toBe(11);
     expect(restored.getNote(note.id)).toMatchObject({ groupName: "", tags: [], archivedAt: null });
   });
 
@@ -539,7 +651,7 @@ describe("NoteStore", () => {
     const restored = new NoteStore(dataPath, "linux");
     await restored.load();
 
-    expect(restored.state.version).toBe(10);
+    expect(restored.state.version).toBe(11);
     expect(restored.getPreferences()).toMatchObject({
       showMainOnLogin: true,
       closeMainToTray: true,

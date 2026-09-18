@@ -232,13 +232,16 @@ function registerIpc() {
   ipcMain.handle("note:delete", async (event, id) => {
     id = validId(id);
     const owner = BrowserWindow.fromWebContents(event.sender);
+    const localOnly = store.isLocalOnly(id);
     const options = {
       type: "warning",
       buttons: ["取消", "删除"],
       defaultId: 0,
       cancelId: 0,
       message: "删除这张便签?",
-      detail: "删除操作会同步到其他设备.",
+      detail: localOnly
+        ? "此便签仅保存在本机, 删除不会影响云端和其他设备."
+        : "删除操作会同步到其他设备.",
     };
     const result = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
     if (result.response !== 1) return;
@@ -249,6 +252,10 @@ function registerIpc() {
     const note = windows.setNoteArchived(validId(id), Boolean(archived));
     if (note) sync.schedule();
     return note;
+  });
+  // 仅本地标记是设备本地决定, 永不进入同步协议, 因此不需要触发 sync.schedule().
+  ipcMain.handle("note:set-local-only", (_event, id, localOnly) => {
+    return windows.setNoteLocalOnly(validId(id), Boolean(localOnly));
   });
   ipcMain.handle("window:open-main", () => windows.openMainWindow() !== null);
   ipcMain.handle("app:request-quit", (event) => confirmAndQuit(BrowserWindow.fromWebContents(event.sender)));
