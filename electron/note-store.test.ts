@@ -514,7 +514,8 @@ describe("NoteStore", () => {
 
     const result = store.applySyncResponse({ notes: [], deleted: [], conflicts: [] }, store.buildSyncRequest());
     expect(result.pending).toBe(false);
-    expect(store.getNote(draft.id)).toMatchObject({ title: "标题", localOnly: true });
+    expect(store.getNote(draft.id)).toMatchObject({ title: "标题" });
+    expect(store.isLocalOnly(draft.id)).toBe(true);
 
     // 未编辑直接失焦丢弃时, 不残留标记也不产生 tombstone.
     const untouched = store.createDraft();
