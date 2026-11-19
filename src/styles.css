@@ -53,9 +53,15 @@ button {
 }
 
 .note-shell.is-collapsed[data-platform="darwin"] {
+  /* 在透明窗口内留出阴影空间, 让同色便签叠放时也能看清边缘. */
+  margin-inline: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  grid-template-rows: minmax(0, 1fr);
+  border-color: color-mix(in srgb, var(--note-ink) 45%, var(--note-bar));
   border-radius: 999px;
   background: var(--note-bar);
-  box-shadow: none;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--note-ink) 50%, transparent);
 }
 
 .window-resize-handle {
