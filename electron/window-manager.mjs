@@ -526,9 +526,9 @@ export class WindowManager {
 
   enableWindowFocus(id, sender) {
     const window = this.windows.get(id);
-    if (!window || window.isDestroyed() || window.webContents !== sender || window.isFocusable()) return false;
-    window.setFocusable(true);
-    this.showNoteWindow(window, { focus: true });
+    if (!window || window.isDestroyed() || window.webContents !== sender || !window.isVisible()) return false;
+    if (!window.isFocusable()) window.setFocusable(true);
+    if (!window.isFocused()) window.focus();
     return true;
   }
 

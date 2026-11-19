@@ -3,6 +3,42 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+test("点击已允许聚焦的便签后键盘输入跟随窗口", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-key-focus-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const main = app.windows().find((page) => page.url().includes("view=main"))!;
+    async function createNote(title: string) {
+      const opened = app.waitForEvent("window");
+      await main.locator(".main-create-button").click();
+      const page = await opened;
+      await page.locator(".title-input").fill(title);
+      return page;
+    }
+    const first = await createNote("A");
+    const second = await createNote("B");
+    const focusedUrl = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.webContents.getURL());
+    await expect.poll(focusedUrl).toBe(second.url());
+    // 模拟窗口收到了首次点击, 但系统仍将键盘焦点留在另一张便签.
+    await first.locator(".title-input").dispatchEvent("pointerdown", { button: 0 });
+    await expect.poll(focusedUrl).toBe(first.url());
+    if (process.platform === "darwin") {
+      await app.evaluate(({ Menu }) => Menu.sendActionToFirstResponder("selectAll:"));
+      await expect.poll(() => first.locator(".title-input").evaluate((input: HTMLInputElement) =>
+        input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0))).toBe("A");
+    }
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()!.webContents.insertText("x"));
+    await expect(first.locator(".title-input")).toHaveValue(/x/);
+    await expect(second.locator(".title-input")).toHaveValue("B");
+  } finally {
+    await app.close();
+  }
+});
+
 test("新建便签聚焦标题并用回车进入内容", async () => {
   const app = await electron.launch({
     args: ["."],
