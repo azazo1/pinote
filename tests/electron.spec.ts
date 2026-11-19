@@ -23,11 +23,28 @@ test("标题栏双击可往返折叠, 点击不会启动窗口拖动", async () 
       return observed;
     });
     const bar = note.locator(".title-bar");
+    const checkClickThenDrag = async (collapsed: boolean) => {
+      const position = { x: 24, y: 8 };
+      const bounds = (await bar.boundingBox())!;
+      const x = bounds.x + position.x;
+      const y = bounds.y + position.y;
+      await note.mouse.click(x, y);
+      await note.mouse.down({ clickCount: 2 });
+      await note.mouse.move(x + 20, y);
+      await note.mouse.up({ clickCount: 2 });
+      const state = await note.evaluate(async () => {
+        const id = new URL(location.href).searchParams.get("noteId")!;
+        return (await window.noteAPI.getNote(id)).note!.collapsed;
+      });
+      expect(state).toBe(collapsed);
+    };
+    await checkClickThenDrag(false);
     await bar.dblclick({ position: { x: 24, y: 8 } });
     await expect.poll(height).toBe(22);
+    await checkClickThenDrag(true);
     await bar.dblclick({ position: { x: 24, y: 10 } });
     await expect.poll(height).toBe(expandedHeight);
-    expect(await gesture.evaluate((observed) => observed.moves)).toBe(0);
+    expect(await gesture.evaluate((observed) => observed.moves)).toBe(2);
   } finally {
     await app.close();
   }

@@ -22,6 +22,7 @@ interface TitleBarProps {
 }
 
 export function TitleBar(props: TitleBarProps) {
+  const lastGestureWasDrag = useRef(false);
   const drag = useRef<{
     pointerId: number;
     pointerX: number;
@@ -89,6 +90,7 @@ export function TitleBar(props: TitleBarProps) {
   function finishPointerDrag(event: PointerEvent<HTMLElement>) {
     const current = drag.current;
     if (props.nativeDrag || !current || current.pointerId !== event.pointerId) return;
+    lastGestureWasDrag.current = current.moved;
     drag.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -106,7 +108,9 @@ export function TitleBar(props: TitleBarProps) {
       onPointerUp={finishPointerDrag}
       onPointerCancel={finishPointerDrag}
       onLostPointerCapture={finishPointerDrag}
-      onDoubleClick={props.onCollapse}
+      onDoubleClick={() => {
+        if (!lastGestureWasDrag.current) props.onCollapse();
+      }}
     >
       <span className="collapsed-title">{props.title || "无标题"}</span>
       <div className="window-actions">
