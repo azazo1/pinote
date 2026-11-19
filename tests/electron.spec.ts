@@ -3,6 +3,36 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+test("标题栏双击可往返折叠, 点击不会启动窗口拖动", async () => {
+  const app = await electron.launch({
+    args: ["."], cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-double-click-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const main = app.windows().find((page) => page.url().includes("view=main"))!;
+    const opened = app.waitForEvent("window");
+    await main.locator(".main-create-button").click();
+    const note = await opened;
+    await note.locator(".title-input").fill("双击标题");
+    const height = () => note.evaluate(() => innerHeight);
+    const expandedHeight = await height();
+    const gesture = await app.evaluateHandle(({ ipcMain }) => {
+      const observed = { moves: 0 };
+      ipcMain.on("window:move-start", () => { observed.moves++; });
+      return observed;
+    });
+    const bar = note.locator(".title-bar");
+    await bar.dblclick({ position: { x: 24, y: 8 } });
+    await expect.poll(height).toBe(22);
+    await bar.dblclick({ position: { x: 24, y: 10 } });
+    await expect.poll(height).toBe(expandedHeight);
+    expect(await gesture.evaluate((observed) => observed.moves)).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
 test("点击已允许聚焦的便签后键盘输入跟随窗口", async () => {
   const app = await electron.launch({
     args: ["."],

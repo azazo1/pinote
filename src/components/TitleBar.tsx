@@ -51,7 +51,6 @@ export function TitleBar(props: TitleBarProps) {
         height: Math.round(noteBounds.height),
       } : null,
     };
-    if (!props.embedded) window.noteAPI.beginWindowMove(props.noteId);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -68,7 +67,8 @@ export function TitleBar(props: TitleBarProps) {
       const shouldStart = props.embedded ? shouldStartShelfDrag(dx, dy) : Math.abs(dx) + Math.abs(dy) > 4;
       if (!shouldStart) return;
       current.moved = true;
-      if (props.embedded && current.sourceBounds) {
+      if (!props.embedded) window.noteAPI.beginWindowMove(props.noteId);
+      else if (current.sourceBounds) {
         props.onEmbeddedDragStart?.(event.screenX, event.screenY, current.sourceBounds);
       }
     }
@@ -93,11 +93,9 @@ export function TitleBar(props: TitleBarProps) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (props.embedded) {
-      if (current.moved) props.onEmbeddedDragEnd?.();
-    } else {
-      window.noteAPI.endWindowMove(props.noteId);
-    }
+    if (!current.moved) return;
+    if (props.embedded) props.onEmbeddedDragEnd?.();
+    else window.noteAPI.endWindowMove(props.noteId);
   }
 
   return (
