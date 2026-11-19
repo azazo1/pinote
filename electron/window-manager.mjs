@@ -894,11 +894,13 @@ export class WindowManager {
       fullscreenable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      hasShadow: true,
+      hasShadow: process.platform !== "darwin",
       backgroundColor: "#00000000",
       webPreferences: rendererPreferences(),
     };
     if (process.platform === "darwin") {
+      // 侧边架由页面绘制轮廓, 避免系统为透明区域绘制圆角外框.
+      options.roundedCorners = false;
       options.type = "panel";
       options.acceptFirstMouse = true;
     }
