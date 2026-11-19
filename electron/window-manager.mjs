@@ -23,6 +23,10 @@ const SHELF_HIDE_DELAY_MS = 700;
 const WINDOW_STATE_SAVE_DELAY_MS = 120;
 const MAIN_WINDOW_WIDTH = 640;
 const MAIN_WINDOW_HEIGHT = 500;
+// 透明窗口的轮廓由页面绘制, 避免 macOS 在透明区域叠加原生外框.
+const FLOATING_WINDOW_OPTIONS = process.platform === "darwin"
+  ? { type: "panel", acceptFirstMouse: true, roundedCorners: false, hasShadow: false }
+  : { hasShadow: true };
 const MACOS_WORKSPACE_OPTIONS = {
   visibleOnFullScreen: true,
   skipTransformProcessType: true,
@@ -224,14 +228,10 @@ export class WindowManager {
       maximizable: false,
       fullscreenable: false,
       alwaysOnTop: state.pinned,
-      hasShadow: true,
+      ...FLOATING_WINDOW_OPTIONS,
       backgroundColor: "#00000000",
       webPreferences: rendererPreferences(),
     };
-    if (process.platform === "darwin") {
-      options.type = "panel";
-      options.acceptFirstMouse = true;
-    }
     const window = new BrowserWindow(options);
 
     this.windows.set(note.id, window);
@@ -894,16 +894,10 @@ export class WindowManager {
       fullscreenable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      hasShadow: process.platform !== "darwin",
+      ...FLOATING_WINDOW_OPTIONS,
       backgroundColor: "#00000000",
       webPreferences: rendererPreferences(),
     };
-    if (process.platform === "darwin") {
-      // 侧边架由页面绘制轮廓, 避免系统为透明区域绘制圆角外框.
-      options.roundedCorners = false;
-      options.type = "panel";
-      options.acceptFirstMouse = true;
-    }
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
     if (process.platform === "darwin") {

@@ -52,6 +52,12 @@ button {
   grid-template-rows: 22px;
 }
 
+.note-shell.is-collapsed[data-platform="darwin"] {
+  border-radius: 999px;
+  background: var(--note-bar);
+  box-shadow: none;
+}
+
 .window-resize-handle {
   position: absolute;
   z-index: 20;
