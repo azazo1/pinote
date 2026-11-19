@@ -594,6 +594,9 @@ button {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  padding-bottom: 3px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--note-ink) 22%, transparent);
 }
 
 .note-archive-checkbox {
@@ -641,8 +644,7 @@ button {
   overflow-wrap: anywhere;
   field-sizing: content;
   max-height: calc(1.25em * 10 + 5px);
-  scrollbar-color: color-mix(in srgb, var(--note-ink) 25%, transparent) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 
 .title-input::placeholder,
