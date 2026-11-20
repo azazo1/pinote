@@ -1,7 +1,35 @@
-import { _electron as electron, expect, test, type Page } from "playwright/test";
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from "playwright/test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+
+// 便签菜单由系统原生弹出, 测试里替换 popup 以检查菜单结构并模拟点击.
+async function installNoteMenuStub(app: ElectronApplication, choice: string | null) {
+  await app.evaluate(({ Menu }, label) => {
+    const state = globalThis as typeof globalThis & {
+      __pinoteMenuLabels?: string[];
+      __pinoteMenuChoice?: string | null;
+      __pinoteMenuPatched?: boolean;
+    };
+    state.__pinoteMenuChoice = label;
+    if (state.__pinoteMenuPatched) return;
+    state.__pinoteMenuPatched = true;
+    Menu.prototype.popup = function (options) {
+      state.__pinoteMenuLabels = this.items
+        .filter((item) => item.type !== "separator")
+        .map((item) => item.label);
+      const picked = state.__pinoteMenuChoice
+        ? this.items.find((item) => item.label === state.__pinoteMenuChoice)
+        : undefined;
+      (picked?.click as unknown as (() => void) | undefined)?.();
+      options.callback?.();
+    };
+  }, choice);
+}
+
+async function readNoteMenuLabels(app: ElectronApplication) {
+  return app.evaluate(() => (globalThis as typeof globalThis & { __pinoteMenuLabels?: string[] }).__pinoteMenuLabels ?? []);
+}
 
 test("标题栏双击可往返折叠, 点击不会启动窗口拖动", async () => {
   const app = await electron.launch({
@@ -703,20 +731,19 @@ test("主窗口和便签窗口关键流程", async () => {
       return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isAlwaysOnTop();
     }, window.url())).toBe(false);
 
+    await installNoteMenuStub(app, null);
     await window.getByLabel("便签操作").click();
-    const menu = window.getByRole("menu", { name: "便签操作" });
-    await expect(menu).toBeVisible();
-    await expect(menu.getByRole("menuitem")).toHaveCount(6);
-    await expect(menu.getByRole("menuitem", { name: "标记完成" })).toBeVisible();
-    await expect(menu.getByText("开始专注")).toHaveCount(0);
+    await expect.poll(() => readNoteMenuLabels(app)).toEqual([
+      "新建便签", "便签颜色", "打开主窗口", "云同步", "仅保留在本机", "标记完成", "删除便签",
+    ]);
     await window.screenshot({ path: "/private/tmp/pinote-note-menu.png" });
-    await menu.getByRole("menuitem", { name: "便签颜色" }).click();
+    await installNoteMenuStub(app, "便签颜色");
+    await window.getByLabel("便签操作").click();
     await expect(window.locator(".color-picker")).toBeVisible();
     await window.locator(".color-swatch").first().click();
     await expect(window.locator(".color-picker")).toHaveCount(0);
+    await installNoteMenuStub(app, "云同步");
     await window.getByLabel("便签操作").click();
-    await expect(menu).toBeVisible();
-    await menu.getByRole("menuitem", { name: "云同步" }).click();
     await expect(window.locator(".sync-panel")).toBeVisible();
     await window.screenshot({ path: "/private/tmp/pinote-sync-panel.png" });
     await window.locator(".sync-panel").getByLabel("关闭", { exact: true }).click();
@@ -930,8 +957,8 @@ test("主窗口和便签窗口关键流程", async () => {
       });
     });
     const secondClosed = secondWindow.waitForEvent("close");
+    await installNoteMenuStub(app, "删除便签");
     await secondWindow.getByLabel("便签操作").click();
-    await secondWindow.getByRole("menuitem", { name: "删除便签" }).click();
     await expect.poll(() => mainWindow.evaluate(async (id) => {
       return (await window.noteAPI.getNote(id)).note;
     }, secondNoteId)).toBeNull();

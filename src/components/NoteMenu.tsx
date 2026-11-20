@@ -1,16 +1,6 @@
-import {
-  AppWindow,
-  ArchiveRestore,
-  CircleCheckBig,
-  Cloud,
-  CloudOff,
-  Ellipsis,
-  Palette,
-  Plus,
-  Trash2,
-  type LucideIcon,
-} from "lucide-react";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Ellipsis } from "lucide-react";
+import { useRef } from "react";
+import type { NoteMenuAction } from "../types";
 
 interface NoteMenuProps {
   onCreate: () => void;
@@ -24,117 +14,52 @@ interface NoteMenuProps {
   onDelete: () => void;
 }
 
-interface MenuItemProps {
-  icon: LucideIcon;
-  label: string;
-  danger?: boolean;
-  onSelect: () => void;
+function runAction(action: NoteMenuAction, props: NoteMenuProps) {
+  switch (action) {
+    case "create-note": props.onCreate(); break;
+    case "open-color-picker": props.onOpenColorPicker(); break;
+    case "open-main-window": props.onOpenMainWindow(); break;
+    case "open-sync": props.onOpenSync(); break;
+    case "toggle-local-only": props.onToggleLocalOnly(); break;
+    case "toggle-archive": props.onToggleArchive(); break;
+    case "delete-note": props.onDelete(); break;
+  }
 }
 
-function MenuItem({ icon: Icon, label, danger, onSelect }: MenuItemProps) {
+// 便签窗口可能缩得很小, 因此菜单交给系统弹出, 不受窗口边界裁切.
+export function NoteMenu(props: NoteMenuProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const busyRef = useRef(false);
+
+  async function openMenu() {
+    if (busyRef.current) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    busyRef.current = true;
+    try {
+      const action = await window.noteAPI.showNoteMenu({
+        archived: props.archived,
+        localOnly: props.localOnly,
+        anchor: rect ? { x: rect.left, y: rect.top } : null,
+      });
+      if (action) runAction(action, props);
+    } catch {
+      // 菜单无法弹出时保持便签原状, 不打断编辑.
+    } finally {
+      busyRef.current = false;
+    }
+  }
+
   return (
     <button
-      className={`note-menu-item${danger ? " is-danger" : ""}`}
+      ref={triggerRef}
+      className="icon-button note-menu-trigger"
       type="button"
-      role="menuitem"
-      onClick={onSelect}
+      aria-label="便签操作"
+      title="便签操作"
+      aria-haspopup="menu"
+      onClick={() => void openMenu()}
     >
-      <Icon size={14} strokeWidth={2} aria-hidden="true" />
-      <span>{label}</span>
+      <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
     </button>
-  );
-}
-
-export function NoteMenu(props: NoteMenuProps) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    menuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
-
-    function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-
-    function onKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      requestAnimationFrame(() => triggerRef.current?.focus());
-    }
-
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  function select(action: () => void) {
-    setOpen(false);
-    action();
-  }
-
-  function navigateMenu(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
-    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"));
-    if (items.length === 0) return;
-    event.preventDefault();
-    const current = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === "Home") items[0].focus();
-    else if (event.key === "End") items[items.length - 1].focus();
-    else if (event.key === "ArrowDown") items[current < 0 ? 0 : (current + 1) % items.length].focus();
-    else items[current <= 0 ? items.length - 1 : current - 1].focus();
-  }
-
-  return (
-    <div ref={rootRef} className="note-menu-root">
-      <button
-        ref={triggerRef}
-        className={`icon-button note-menu-trigger${open ? " is-active" : ""}`}
-        type="button"
-        aria-label="便签操作"
-        title="便签操作"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
-      </button>
-
-      {open && (
-        <div
-          ref={menuRef}
-          id={menuId}
-          className="note-menu"
-          role="menu"
-          aria-label="便签操作"
-          onKeyDown={navigateMenu}
-        >
-          <MenuItem icon={Plus} label="新建便签" onSelect={() => select(props.onCreate)} />
-          <MenuItem icon={Palette} label="便签颜色" onSelect={() => select(props.onOpenColorPicker)} />
-          <MenuItem icon={AppWindow} label="打开主窗口" onSelect={() => select(props.onOpenMainWindow)} />
-          <MenuItem icon={Cloud} label="云同步" onSelect={() => select(props.onOpenSync)} />
-          <MenuItem
-            icon={props.localOnly ? Cloud : CloudOff}
-            label={props.localOnly ? "恢复云同步" : "仅保留在本机"}
-            onSelect={() => select(props.onToggleLocalOnly)}
-          />
-          <div className="note-menu-separator" role="separator" />
-          <MenuItem
-            icon={props.archived ? ArchiveRestore : CircleCheckBig}
-            label={props.archived ? "恢复为活跃便签" : "标记完成"}
-            onSelect={() => select(props.onToggleArchive)}
-          />
-          <MenuItem icon={Trash2} label="删除便签" danger onSelect={() => select(props.onDelete)} />
-        </div>
-      )}
-    </div>
   );
 }

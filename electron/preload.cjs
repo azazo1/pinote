@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   }),
   endWindowResize: (id) => ipcRenderer.send("window:resize-end", id),
   setPinned: (id, pinned) => ipcRenderer.invoke("window:set-pinned", id, pinned),
+  showNoteMenu: (request) => ipcRenderer.invoke("note:show-menu", request),
   dockNote: (id) => ipcRenderer.invoke("group:dock-note", id),
   undockNote: (id) => ipcRenderer.invoke("group:undock-note", id),
   revealGroup: () => ipcRenderer.send("group:reveal"),

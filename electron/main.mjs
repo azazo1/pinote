@@ -8,6 +8,7 @@ import { NoteStore } from "./note-store.mjs";
 import { ShortcutManager } from "./shortcut-manager.mjs";
 import { SHORTCUT_COMMANDS } from "./shortcut-settings.mjs";
 import { WindowManager } from "./window-manager.mjs";
+import { sanitizeNoteMenuRequest, showNoteMenu } from "./note-menu.mjs";
 import { SyncService } from "./sync-service.mjs";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { installTerminationHandlers } from "./process-signals.mjs";
@@ -275,6 +276,9 @@ function registerIpc() {
   });
   ipcMain.on("window:resize-end", (event, id) => windows.endResize(validId(id), event.sender));
   ipcMain.handle("window:set-pinned", (_event, id, pinned) => windows.setPinned(validId(id), Boolean(pinned)));
+  ipcMain.handle("note:show-menu", (event, request) => {
+    return showNoteMenu(BrowserWindow.fromWebContents(event.sender), sanitizeNoteMenuRequest(request));
+  });
   ipcMain.handle("group:dock-note", (_event, id) => windows.dockNoteResult(validId(id)));
   ipcMain.handle("group:undock-note", (_event, id) => windows.undockNoteResult(validId(id)));
   ipcMain.on("group:reveal", () => windows.revealGroup());

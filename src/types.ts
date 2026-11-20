@@ -179,6 +179,21 @@ export interface UpdateSnapshot {
   isFakeBuild: boolean;
 }
 
+export type NoteMenuAction =
+  | "create-note"
+  | "open-color-picker"
+  | "open-main-window"
+  | "open-sync"
+  | "toggle-local-only"
+  | "toggle-archive"
+  | "delete-note";
+
+export interface NoteMenuRequest {
+  archived: boolean;
+  localOnly: boolean;
+  anchor: { x: number; y: number } | null;
+}
+
 export interface NoteAPI {
   getNote: (id: string) => Promise<{ note: Note | null; group: GroupState; capabilities: PlatformCapabilities }>;
   updateNote: (
@@ -204,6 +219,7 @@ export interface NoteAPI {
   resizeWindow: (id: string, edge: NoteResizeEdge, size: WindowSize) => void;
   endWindowResize: (id: string) => void;
   setPinned: (id: string, pinned: boolean) => Promise<void>;
+  showNoteMenu: (request: NoteMenuRequest) => Promise<NoteMenuAction | null>;
   dockNote: (id: string) => Promise<DockToggleResult>;
   undockNote: (id: string) => Promise<DockToggleResult>;
   revealGroup: () => void;

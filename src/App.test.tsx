@@ -46,24 +46,24 @@ describe("App archive state", () => {
 describe("App local-only state", () => {
   it("marks a synced note as local-only from the note menu", async () => {
     const api = installNoteApi(activeNote());
+    api.showNoteMenu.mockResolvedValue("toggle-local-only");
     api.setNoteLocalOnly.mockResolvedValue({ ...activeNote(), localOnly: true });
     const view = render(<App />);
     fireEvent.click(await view.findByRole("button", { name: "便签操作" }));
 
-    fireEvent.click(view.getByRole("menuitem", { name: "仅保留在本机" }));
-
     await waitFor(() => expect(api.setNoteLocalOnly).toHaveBeenCalledWith("note-1", true));
+    expect(api.showNoteMenu).toHaveBeenCalledWith({ archived: false, localOnly: false, anchor: { x: 0, y: 0 } });
   });
 
   it("restores cloud sync from the note menu for a local-only note", async () => {
     const api = installNoteApi({ ...activeNote(), localOnly: true });
+    api.showNoteMenu.mockResolvedValue("toggle-local-only");
     api.setNoteLocalOnly.mockResolvedValue(activeNote());
     const view = render(<App />);
     fireEvent.click(await view.findByRole("button", { name: "便签操作" }));
 
-    fireEvent.click(view.getByRole("menuitem", { name: "恢复云同步" }));
-
     await waitFor(() => expect(api.setNoteLocalOnly).toHaveBeenCalledWith("note-1", false));
+    expect(api.showNoteMenu).toHaveBeenCalledWith({ archived: false, localOnly: true, anchor: { x: 0, y: 0 } });
   });
 });
 
@@ -99,6 +99,7 @@ function installNoteApi(note: Note) {
     getSyncStatus: vi.fn().mockResolvedValue({ state: "idle", message: "同步未启用" }),
     setNoteArchived: vi.fn().mockResolvedValue(note),
     setNoteLocalOnly: vi.fn().mockResolvedValue(note),
+    showNoteMenu: vi.fn().mockResolvedValue(null),
     updateNote: vi.fn(),
     onCollapsed: noSubscription,
     onGroupState: noSubscription,
@@ -109,6 +110,7 @@ function installNoteApi(note: Note) {
   } as unknown as NoteAPI & {
     setNoteArchived: ReturnType<typeof vi.fn>;
     setNoteLocalOnly: ReturnType<typeof vi.fn>;
+    showNoteMenu: ReturnType<typeof vi.fn>;
   };
   Object.defineProperty(window, "noteAPI", { configurable: true, value: api });
   return api;

@@ -7,5 +7,6 @@ target/
 .DS_Store
 coverage/
 test-results/
+.tmp/
 data/
 secrets/

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "bun run icons && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc --noEmit && vite build --base=./",
-    "icons": "bun scripts/generate-icons.mjs",
+    "icons": "bun scripts/generate-icons.mjs && bun scripts/generate-menu-icons.mjs",
     "version:embed": "bun scripts/write-build-version.mjs",
     "pack": "bun run build && bun run icons && bun run version:embed && electron-builder --dir",
     "start": "bun run icons && electron .",
