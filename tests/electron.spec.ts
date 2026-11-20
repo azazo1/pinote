@@ -70,10 +70,15 @@ test("点击已允许聚焦的便签后键盘输入跟随窗口", async () => {
     const second = await createNote("B");
     const focusedUrl = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.webContents.getURL());
     await expect.poll(focusedUrl).toBe(second.url());
-    // 模拟窗口收到了首次点击, 但系统仍将键盘焦点留在另一张便签.
+    if (process.platform === "darwin") {
+      execFileSync("osascript", ["-e", "tell application \"Finder\" to activate"]);
+      await expect.poll(() => app.evaluate(({ app }) => app.isActive())).toBe(false);
+    }
+    // 模拟窗口收到了首次点击, 但系统仍将键盘焦点留在另一张便签或其他应用.
     await first.locator(".title-input").dispatchEvent("pointerdown", { button: 0 });
     await expect.poll(focusedUrl).toBe(first.url());
     if (process.platform === "darwin") {
+      await expect.poll(() => app.evaluate(({ app }) => app.isActive())).toBe(true);
       await app.evaluate(({ Menu }) => Menu.sendActionToFirstResponder("selectAll:"));
       await expect.poll(() => first.locator(".title-input").evaluate((input: HTMLInputElement) =>
         input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0))).toBe("A");

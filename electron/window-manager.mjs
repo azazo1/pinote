@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { app, BrowserWindow, screen } from "electron";
 import log from "electron-log/main.js";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
 import { loadRenderer, rendererPreferences } from "./renderer-host.mjs";
@@ -525,11 +525,22 @@ export class WindowManager {
   }
 
   enableWindowFocus(id, sender) {
-    const window = this.windows.get(id);
-    if (!window || window.isDestroyed() || window.webContents !== sender || !window.isVisible()) return false;
-    if (!window.isFocusable()) window.setFocusable(true);
-    if (!window.isFocused()) window.focus();
+    const window = BrowserWindow.fromWebContents(sender);
+    if (!window || window.isDestroyed() || !window.isVisible()) return false;
+    if (window === this.shelfWindow) {
+      if (!this.shelfExpanded || this.activeDockedId !== id || this.shelfHostedNoteId !== id) return false;
+    } else if (window !== this.windows.get(id)) return false;
+    this.focusForEditing(window);
     return true;
+  }
+
+  focusForEditing(window) {
+    if (!window.isFocusable()) window.setFocusable(true);
+    // macOS 的 panel 可在其他应用仍处于前台时成为 key window.
+    const needsActivation = process.platform === "darwin" && !this.isAppActive();
+    if (needsActivation) app.focus({ steal: true });
+    if (needsActivation || !window.isFocused()) window.focus();
+    if (!window.webContents.isFocused()) window.webContents.focus();
   }
 
   shouldDockAtShelf(point, proximityHysteresis = 0) {
@@ -1180,7 +1191,10 @@ export class WindowManager {
       return true;
     }
     const detached = this.detachDockedNote(session.id, { restoreBounds: false });
-    if (detached) this.persistBounds(session.id);
+    if (detached) {
+      if (window && !window.isDestroyed()) window.setFocusable(true);
+      this.persistBounds(session.id);
+    }
     log.info("侧边架便签已通过拖动移出", { id: session.id });
     return detached;
   }
@@ -1393,7 +1407,7 @@ export class WindowManager {
     const shelf = this.ensureShelfWindow();
     if (!shelf) return null;
     shelf.show();
-    shelf.focus();
+    this.focusForEditing(shelf);
     setImmediate(() => {
       if (!shelf.isDestroyed() && this.activeDockedId === id) {
         shelf.webContents.send("app:command", initialFocus === "title" ? "focus-title" : "focus-editor");
@@ -1492,7 +1506,7 @@ export class WindowManager {
     if (!window || window.isDestroyed()) return false;
     if (inactive) window.showInactive();
     else window.show();
-    if (focus) window.focus();
+    if (focus) this.focusForEditing(window);
     return true;
   }
 

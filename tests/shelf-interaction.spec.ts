@@ -79,6 +79,8 @@ test("侧边架全屏拖放和收纳动画", async () => {
     first = await waitForWindow(app, `noteId=${firstId}`);
     await expect(first.locator(".note-shell")).toBeVisible();
     expect(await focusedWindowUrl(app)).toBe(focusedBeforeDrag);
+    expect(await app.evaluate(({ BrowserWindow }, url) =>
+      BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url)?.isFocusable(), first.url())).toBe(true);
     if (platform === "darwin") {
       expect(await app.evaluate(({ BrowserWindow }, url) => {
         return BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === url)?.isFullScreen();

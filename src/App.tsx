@@ -407,7 +407,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
       className={`note-shell${note.collapsed ? " is-collapsed" : ""}${inlineShelf ? " has-inline-shelf" : ""}${embedded ? " is-shelf-workspace" : ""}`}
       data-platform={capabilities.platform}
       style={style}
-      onPointerDownCapture={embedded ? undefined : () => window.noteAPI.enableWindowFocus(note.id)}
+      onPointerDownCapture={() => window.noteAPI.enableWindowFocus(note.id)}
       onMouseEnter={docked && !embedded ? () => window.noteAPI.revealGroup() : undefined}
       onMouseLeave={docked && !embedded ? () => window.noteAPI.hideGroup() : undefined}
     >
