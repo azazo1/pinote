@@ -1,7 +1,33 @@
-import { indentLess, indentMore } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
-import type { EditorState, StateCommand } from "@codemirror/state";
+import { countColumn, type ChangeSpec, type EditorState, type StateCommand } from "@codemirror/state";
 import type { KeyBinding } from "@codemirror/view";
+import { markdownCodeBlockLines } from "./markdown-preview";
+
+const INDENT_WIDTH = 4;
+const LIST_MARKER = /^([ \t]*)([-+*]|\d{1,9}[.)])([ \t]{1,4}|$)/;
+
+interface ListLineInfo {
+  lineFrom: number;
+  indentText: string;
+  indentColumns: number;
+}
+
+function listLineInfo(
+  state: EditorState,
+  lineNumber: number,
+  codeBlockLines: Map<number, unknown>,
+): ListLineInfo | null {
+  if (codeBlockLines.has(lineNumber)) return null;
+
+  const line = state.doc.line(lineNumber);
+  const match = LIST_MARKER.exec(line.text);
+  if (!match) return null;
+
+  return {
+    lineFrom: line.from,
+    indentText: match[1],
+    indentColumns: countColumn(match[1], state.tabSize),
+  };
+}
 
 function selectedLineNumbers(state: EditorState) {
   const lineNumbers = new Set<number>();
@@ -17,27 +43,42 @@ function selectedLineNumbers(state: EditorState) {
   return lineNumbers;
 }
 
-function selectionContainsListItem(state: EditorState) {
-  const lineNumbers = selectedLineNumbers(state);
-  let containsListItem = false;
+function adjustIndent(direction: 1 | -1): StateCommand {
+  return ({ state, dispatch }) => {
+    const lineNumbers = selectedLineNumbers(state);
+    if (lineNumbers.size === 0) return false;
 
-  syntaxTree(state).iterate({
-    enter(node) {
-      if (node.name === "ListMark" && lineNumbers.has(state.doc.lineAt(node.from).number)) {
-        containsListItem = true;
-      }
-    },
-  });
+    const codeBlockLines = markdownCodeBlockLines(state);
+    const changes: ChangeSpec[] = [];
+    let matchedListLine = false;
 
-  return containsListItem;
+    for (const lineNumber of [...lineNumbers].sort((left, right) => left - right)) {
+      const info = listLineInfo(state, lineNumber, codeBlockLines);
+      if (!info) continue;
+      matchedListLine = true;
+
+      const target = direction > 0
+        ? info.indentColumns + INDENT_WIDTH
+        : Math.max(0, info.indentColumns - INDENT_WIDTH);
+      if (target === info.indentColumns) continue;
+
+      changes.push({
+        from: info.lineFrom,
+        to: info.lineFrom + info.indentText.length,
+        insert: " ".repeat(target),
+      });
+    }
+
+    if (!matchedListLine) return false;
+    if (changes.length > 0) {
+      dispatch(state.update({ changes, scrollIntoView: true, userEvent: "input.indent" }));
+    }
+    return true;
+  };
 }
 
-function forMarkdownList(command: StateCommand): StateCommand {
-  return (target) => selectionContainsListItem(target.state) && command(target);
-}
-
-export const indentMarkdownList = forMarkdownList(indentMore);
-export const dedentMarkdownList = forMarkdownList(indentLess);
+export const indentMarkdownList = adjustIndent(1);
+export const dedentMarkdownList = adjustIndent(-1);
 
 export const markdownListIndentKeyBinding: KeyBinding = {
   key: "Tab",

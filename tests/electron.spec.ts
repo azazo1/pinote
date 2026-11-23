@@ -229,17 +229,23 @@ test("Tab and Shift+Tab indent Markdown list items", async () => {
     const editor = noteWindow.locator(".note-editor .cm-content");
 
     for (const markdown of ["- unordered", "1. ordered", "- [ ] task"]) {
+      const markdownValue = () => noteWindow.evaluate(async (id) => (
+        await window.noteAPI.getNote(id)
+      ).note?.markdown, noteId);
+
       await editor.fill(markdown);
       await editor.press("End");
       await editor.press("Tab");
-      await expect.poll(() => noteWindow.evaluate(async (id) => (
-        await window.noteAPI.getNote(id)
-      ).note?.markdown, noteId)).toBe(`  ${markdown}`);
+      await expect.poll(markdownValue).toBe(`    ${markdown}`);
+
+      await editor.press("Tab");
+      await expect.poll(markdownValue).toBe(`        ${markdown}`);
 
       await editor.press("Shift+Tab");
-      await expect.poll(() => noteWindow.evaluate(async (id) => (
-        await window.noteAPI.getNote(id)
-      ).note?.markdown, noteId)).toBe(markdown);
+      await expect.poll(markdownValue).toBe(`    ${markdown}`);
+
+      await editor.press("Shift+Tab");
+      await expect.poll(markdownValue).toBe(markdown);
     }
   } finally {
     await app.close();

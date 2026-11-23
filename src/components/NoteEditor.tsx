@@ -237,7 +237,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
           markdown(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           EditorView.lineWrapping,
-          EditorState.tabSize.of(2),
+          EditorState.tabSize.of(4),
           EditorView.contentAttributes.of({
             "aria-label": "便签内容",
             autocapitalize: "sentences",
