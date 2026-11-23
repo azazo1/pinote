@@ -46,6 +46,15 @@ describe("markdownLinePreview", () => {
     ]);
   });
 
+  it("keeps the bullet rendered on the active list line", () => {
+    const preview = markdownLinePreview("- item", 0, true);
+
+    expect(preview.className).toBe("cm-md-list-line");
+    expect(preview.decorations).toEqual([
+      { kind: "replace", from: 0, to: 2, replacement: { kind: "bullet" } },
+    ]);
+  });
+
   it("keeps additional spaces after the task separator editable", () => {
     const preview = markdownLinePreview("- [ ]   todo", 0, true);
 
