@@ -250,14 +250,12 @@ export function markdownLinePreview(
     const markerFrom = ordered[1].length;
     bodyFrom = ordered[0].length;
     className = "cm-md-list-line";
-    if (!active) {
-      decorations.push({
-        kind: "replace",
-        from: offset + markerFrom,
-        to: offset + bodyFrom,
-        replacement: { kind: "ordered", label: `${ordered[2]}.` },
-      });
-    }
+    decorations.push({
+      kind: "replace",
+      from: offset + markerFrom,
+      to: offset + bodyFrom,
+      replacement: { kind: "ordered", label: `${ordered[2]}.` },
+    });
   } else if (quote) {
     const markerFrom = quote[1].length;
     bodyFrom = quote[0].length;

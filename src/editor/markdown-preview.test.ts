@@ -55,6 +55,15 @@ describe("markdownLinePreview", () => {
     ]);
   });
 
+  it("keeps the ordered marker rendered on the active list line", () => {
+    const preview = markdownLinePreview("1. item", 0, true);
+
+    expect(preview.className).toBe("cm-md-list-line");
+    expect(preview.decorations).toEqual([
+      { kind: "replace", from: 0, to: 3, replacement: { kind: "ordered", label: "1." } },
+    ]);
+  });
+
   it("keeps additional spaces after the task separator editable", () => {
     const preview = markdownLinePreview("- [ ]   todo", 0, true);
 
