@@ -4,7 +4,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { configureAppLogging, installProcessErrorHandlers, logRuntimeInfo, setLogLevel } from "./app-logging.mjs";
+import { avoidanceModifierOptions, normalizeAvoidanceModifier } from "./avoidance-settings.mjs";
 import { NoteStore } from "./note-store.mjs";
+import { ModifierWatcher } from "./input/modifier-watcher.mjs";
 import { ShortcutManager } from "./shortcut-manager.mjs";
 import { SHORTCUT_COMMANDS } from "./shortcut-settings.mjs";
 import { WindowManager } from "./window-manager.mjs";
@@ -55,6 +57,7 @@ let store;
 let windows;
 let sync;
 let shortcutManager;
+let modifierWatcher = null;
 let tray = null;
 let trayController = null;
 let updateService = null;
@@ -131,6 +134,16 @@ function startApplication() {
       broadcast: broadcastSettings,
     });
     shortcutManager.initialize();
+    modifierWatcher = new ModifierWatcher({
+      platform: process.platform,
+      wayland: windows.getCapabilities().wayland,
+      modifier: store.getPreferences().avoidanceModifier,
+      helperPath: resolveAvoidanceHelperPath(),
+      logger: log,
+      onPress: () => windows.beginAvoidance(),
+      onRelease: () => windows.endAvoidance(),
+    });
+    void modifierWatcher.start();
     updateService.initialize();
     const startHidden = store.getPreferences().startHidden || process.argv.includes(LOGIN_HIDDEN_ARGUMENT);
     if (!startHidden) windows.openMainWindow();
@@ -200,6 +213,7 @@ function startApplication() {
     releaseSingleInstanceLock({ app });
     updateService?.dispose();
     shortcutManager?.dispose();
+    modifierWatcher?.dispose();
     tray?.destroy();
     tray = null;
     trayController = null;
@@ -313,6 +327,14 @@ function registerIpc() {
   ipcMain.handle("settings:update-general", (_event, patch) => updateGeneralSettings(patch));
   ipcMain.handle("settings:update-shortcut", (_event, id, patch) => {
     shortcutManager.update(id, patch);
+    return getAppSettings();
+  });
+  ipcMain.handle("settings:update-avoidance", (_event, modifier) => {
+    const normalized = normalizeAvoidanceModifier(modifier, process.platform);
+    store.updatePreferences({ avoidanceModifier: normalized });
+    modifierWatcher?.setModifier(normalized);
+    log.info("便签避让按键已更新", { modifier: normalized });
+    broadcastSettings();
     return getAppSettings();
   });
   ipcMain.handle("settings:reset-shortcut", (_event, id) => {
@@ -473,6 +495,14 @@ async function confirmAndQuit(owner) {
   }
 }
 
+// 修饰键轮询 helper 在打包后位于 Resources 根目录, 开发时用构建产物.
+function resolveAvoidanceHelperPath() {
+  if (process.platform !== "darwin") return null;
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "mac-modifier-state")
+    : path.join(currentDir, "..", "build", "generated", "mac-modifier-state");
+}
+
 function getAppInfo() {
   return {
     name: app.getName(),
@@ -516,6 +546,10 @@ function getAppSettings() {
       ...command,
       ...preferences.shortcuts[command.id],
     })),
+    avoidance: {
+      modifier: preferences.avoidanceModifier,
+      options: avoidanceModifierOptions(process.platform),
+    },
   };
 }
 

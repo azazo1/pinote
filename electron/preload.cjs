@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   getAppSettings: () => ipcRenderer.invoke("settings:get"),
   updateGeneralSettings: (patch) => ipcRenderer.invoke("settings:update-general", patch),
   updateShortcut: (id, patch) => ipcRenderer.invoke("settings:update-shortcut", id, patch),
+  updateAvoidanceModifier: (modifier) => ipcRenderer.invoke("settings:update-avoidance", modifier),
   resetShortcut: (id) => ipcRenderer.invoke("settings:reset-shortcut", id),
   resetShortcuts: () => ipcRenderer.invoke("settings:reset-shortcuts"),
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),
@@ -68,6 +69,11 @@ contextBridge.exposeInMainWorld("noteAPI", {
     const listener = (_event, collapsed) => callback(collapsed);
     ipcRenderer.on("note:collapsed", listener);
     return () => ipcRenderer.removeListener("note:collapsed", listener);
+  },
+  onAvoidance: (callback) => {
+    const listener = (_event, avoiding) => callback(Boolean(avoiding));
+    ipcRenderer.on("avoidance:state", listener);
+    return () => ipcRenderer.removeListener("avoidance:state", listener);
   },
   onGroupState: (callback) => {
     const listener = (_event, state) => callback(state);

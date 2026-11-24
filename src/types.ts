@@ -97,6 +97,19 @@ export type ShortcutCommandId =
   | "toggle-metadata"
   | "toggle-archive";
 
+// 便签避让按键: 这里只选一个"按住"的修饰键, 不是组合快捷键.
+export type AvoidanceModifier = "meta" | "alt" | "control" | "shift";
+
+export interface AvoidanceModifierOption {
+  id: AvoidanceModifier;
+  label: string;
+}
+
+export interface AvoidanceSettings {
+  modifier: AvoidanceModifier;
+  options: AvoidanceModifierOption[];
+}
+
 export interface GeneralSettings {
   launchAtLogin: boolean;
   launchAtLoginSupported: boolean;
@@ -123,6 +136,7 @@ export interface ShortcutSetting {
 export interface AppSettings {
   general: GeneralSettings;
   shortcuts: ShortcutSetting[];
+  avoidance: AvoidanceSettings;
 }
 
 export interface AppInfo {
@@ -247,6 +261,7 @@ export interface NoteAPI {
     id: ShortcutCommandId,
     patch: { accelerator?: string | null; global?: boolean },
   ) => Promise<AppSettings>;
+  updateAvoidanceModifier: (modifier: AvoidanceModifier) => Promise<AppSettings>;
   resetShortcut: (id: ShortcutCommandId) => Promise<AppSettings>;
   resetShortcuts: () => Promise<AppSettings>;
   getAppInfo: () => Promise<AppInfo>;
@@ -260,6 +275,7 @@ export interface NoteAPI {
   openUpdateReleasePage: () => Promise<boolean>;
   dismissUpdateApplyResult: () => Promise<boolean>;
   onCollapsed: (callback: (collapsed: boolean) => void) => () => void;
+  onAvoidance: (callback: (avoiding: boolean) => void) => () => void;
   onGroupState: (callback: (state: GroupState) => void) => () => void;
   onCommand: (callback: (command: AppCommand) => void) => () => void;
   onRemoteNote: (callback: (note: Note) => void) => () => void;

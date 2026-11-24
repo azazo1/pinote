@@ -59,7 +59,12 @@ export function SettingsCenter({ section, status, onSection, onStatus }: Setting
         ) : section === "general" ? (
           <GeneralSettingsSection settings={settings.general} onSettings={setSettings} />
         ) : section === "shortcuts" ? (
-          <ShortcutSettingsSection shortcuts={settings.shortcuts} platform={info.platform} onSettings={setSettings} />
+          <ShortcutSettingsSection
+            shortcuts={settings.shortcuts}
+            avoidance={settings.avoidance}
+            platform={info.platform}
+            onSettings={setSettings}
+          />
         ) : section === "sync" ? (
           <div className="settings-section-body">
             <header className="settings-section-heading">

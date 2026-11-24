@@ -5,7 +5,7 @@
 #   PROJECT_BUILD_VERSION=v0.5.0 bash scripts/dist-macos.sh
 #   通常经 just dist / just fake-dist 注入版本号后调用.
 #
-# 步骤: bun run build → bun run icons → bun run version:embed → electron-builder 打 dmg
+# 步骤: bun run native → bun run build → bun run icons → bun run version:embed → electron-builder 打 dmg
 #       → 校验应用包与主可执行文件 → 按契约重命名 → 清理 release/ 只留契约文件.
 # 产出: release/pinote-<version>-macos-<arch>.dmg
 #       fake 构建为 release/pinote-v0.0.0-macos-<arch>-fake.dmg
@@ -46,6 +46,11 @@ fi
 
 echo "== macOS 打包: 版本 $PROJECT_BUILD_VERSION, 架构 $arch"
 
+bun run native
+if [[ ! -x build/generated/mac-modifier-state ]]; then
+  echo "缺少 build/generated/mac-modifier-state, 便签避让会不可用; 请确认 Xcode command line tools 可用" >&2
+  exit 1
+fi
 bun run build
 bun run icons
 bun run version:embed

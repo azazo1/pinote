@@ -1,9 +1,16 @@
 import { RotateCcw, Trash2 } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
-import type { AppSettings, ShortcutCommandId, ShortcutSetting } from "../../types";
+import type {
+  AppSettings,
+  AvoidanceModifier,
+  AvoidanceSettings,
+  ShortcutCommandId,
+  ShortcutSetting,
+} from "../../types";
 
 interface ShortcutSettingsSectionProps {
   shortcuts: ShortcutSetting[];
+  avoidance: AvoidanceSettings;
   platform: string;
   onSettings: (settings: AppSettings) => void;
 }
@@ -14,10 +21,11 @@ const groupLabels = {
   note: "便签",
 } as const;
 
-export function ShortcutSettingsSection({ shortcuts, platform, onSettings }: ShortcutSettingsSectionProps) {
+export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSettings }: ShortcutSettingsSectionProps) {
   const [recording, setRecording] = useState<ShortcutCommandId | null>(null);
-  const [busy, setBusy] = useState<ShortcutCommandId | "all" | null>(null);
+  const [busy, setBusy] = useState<ShortcutCommandId | "all" | "avoidance" | null>(null);
   const [errors, setErrors] = useState<Partial<Record<ShortcutCommandId, string>>>({});
+  const [avoidanceError, setAvoidanceError] = useState("");
 
   async function update(id: ShortcutCommandId, patch: { accelerator?: string | null; global?: boolean }) {
     setBusy(id);
@@ -52,6 +60,18 @@ export function ShortcutSettingsSection({ shortcuts, platform, onSettings }: Sho
     } catch (reason) {
       const message = errorMessage(reason);
       setErrors(Object.fromEntries(shortcuts.map((shortcut) => [shortcut.id, message])));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateAvoidance(modifier: AvoidanceModifier) {
+    setBusy("avoidance");
+    setAvoidanceError("");
+    try {
+      onSettings(await window.noteAPI.updateAvoidanceModifier(modifier));
+    } catch (reason) {
+      setAvoidanceError(errorMessage(reason));
     } finally {
       setBusy(null);
     }
@@ -146,6 +166,35 @@ export function ShortcutSettingsSection({ shortcuts, platform, onSettings }: Sho
           </section>
         );
       })}
+
+      <section className="settings-group shortcut-group" aria-labelledby="shortcut-avoidance">
+        <h2 id="shortcut-avoidance">便签避让</h2>
+        <div className="shortcut-list">
+          <div className="shortcut-row shortcut-row-single">
+            <div className="shortcut-name">
+              <strong>按住让位</strong>
+              {avoidanceError ? (
+                <span role="alert">{avoidanceError}</span>
+              ) : (
+                <span className="shortcut-hint">
+                  按住该键时, 鼠标附近的便签会飘开; 只监听按键, 不拦截, 不抢焦点
+                </span>
+              )}
+            </div>
+            <select
+              className="shortcut-select"
+              aria-label="便签避让按键"
+              value={avoidance.modifier}
+              disabled={busy !== null}
+              onChange={(event) => void updateAvoidance(event.target.value as AvoidanceModifier)}
+            >
+              {avoidance.options.map((option) => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

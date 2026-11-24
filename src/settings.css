@@ -287,6 +287,36 @@
   border-bottom: 1px solid rgb(32 34 31 / 7%);
 }
 
+/* 便签避让只有"按键选择"一个控件, 因此占两列. */
+.shortcut-row-single {
+  grid-template-columns: minmax(90px, 1fr) 130px;
+}
+
+.shortcut-select {
+  width: 130px;
+  height: 28px;
+  padding: 0 6px;
+  color: #434640;
+  background: #fff;
+  border: 1px solid #d6d8d1;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 10px;
+}
+
+.shortcut-select:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.shortcut-name .shortcut-hint {
+  overflow: visible;
+  color: #8d9088;
+  line-height: 1.35;
+  white-space: normal;
+  text-overflow: clip;
+}
+
 .shortcut-name {
   display: grid;
   min-width: 0;

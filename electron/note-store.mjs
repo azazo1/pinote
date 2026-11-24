@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import log from "electron-log/main.js";
+import { normalizeAvoidanceModifier } from "./avoidance-settings.mjs";
 import { defaultShortcutBindings, normalizeShortcutBindings } from "./shortcut-settings.mjs";
 
 const CURRENT_VERSION = 11;
@@ -492,6 +493,7 @@ function normalizePreferences(value, platform) {
     verboseLogging: Boolean(value?.verboseLogging),
     defaultNoteColor: NOTE_COLORS.has(value?.defaultNoteColor) ? value.defaultNoteColor : DEFAULT_COLOR,
     defaultNotePinned: Boolean(value?.defaultNotePinned),
+    avoidanceModifier: normalizeAvoidanceModifier(value?.avoidanceModifier, platform),
     update: {
       autoCheck: value?.update?.autoCheck !== false,
       skippedVersion: typeof value?.update?.skippedVersion === "string"

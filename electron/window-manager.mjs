@@ -1,5 +1,6 @@
 import { app, BrowserWindow, screen } from "electron";
 import log from "electron-log/main.js";
+import { AvoidanceService } from "./avoidance-service.mjs";
 import { RendererFlushCoordinator } from "./sync/renderer-flush.mjs";
 import { loadRenderer, rendererPreferences } from "./renderer-host.mjs";
 import { isPointNearBounds, SHELF_DOCK_PROXIMITY } from "./windowing/shelf-proximity.mjs";
@@ -63,6 +64,11 @@ export class WindowManager {
     this.rendererFlush = new RendererFlushCoordinator(1_200, (pending) => {
       log.warn("等待便签保存超时", { pending });
     });
+    this.avoidance = new AvoidanceService({
+      getTargets: () => this.avoidanceTargetCandidates(),
+      workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
+      logger: log,
+    });
     this.wayland = isWaylandSession();
     this.trayAvailable = false;
     this.quitting = false;
@@ -74,6 +80,57 @@ export class WindowManager {
 
   getCapabilities() {
     return { platform: process.platform, wayland: this.wayland };
+  }
+
+  // 按住平台修饰键时, 鼠标附近的便签依次飘开; 正在编辑(聚焦)的那一个保持不动.
+  beginAvoidance() {
+    if (this.quitting) return false;
+    return this.avoidance.begin(screen.getCursorScreenPoint());
+  }
+
+  endAvoidance() {
+    if (this.quitting) return false;
+    return this.avoidance.finish();
+  }
+
+  // 参与避让的窗口: 可见便签窗口与侧边架, 排除正在展开编辑、正在拖动/缩放的窗口.
+  avoidanceTargetCandidates() {
+    const focused = BrowserWindow.getFocusedWindow();
+    const targets = [];
+    for (const [id, window] of this.windows) {
+      if (window.isDestroyed() || !window.isVisible()) continue;
+      if (this.isNoteBeingEdited(id, window, focused)) continue;
+      if (this.moveSessions.has(id) || this.resizeSessions.has(id) || this.transitioningNotes.has(id)) continue;
+      targets.push({ key: id, window });
+    }
+    const shelf = this.shelfWindow;
+    if (shelf && !shelf.isDestroyed() && shelf.isVisible() && !this.isShelfBeingEdited(shelf, focused)) {
+      targets.push({ key: "shelf", window: shelf });
+    }
+    return targets;
+  }
+
+  // 展开状态且获得焦点的便签才算"正在编辑", 收起的小条不受影响.
+  isNoteBeingEdited(id, window, focused) {
+    if (this.store.getWindowState(id).collapsed) return false;
+    return this.hasEditingFocus(window, focused);
+  }
+
+  // 侧边架展开并托管着便签时, 整个侧边架都在编辑区里, 不能避开.
+  isShelfBeingEdited(shelf, focused) {
+    if (this.shelfExpanded && this.activeDockedId) return true;
+    return this.hasEditingFocus(shelf, focused);
+  }
+
+  hasEditingFocus(window, focused) {
+    if (window === focused) return true;
+    const webContents = window.webContents;
+    if (!webContents || webContents.isDestroyed?.()) return false;
+    return Boolean(webContents.isFocused?.());
+  }
+
+  isAvoidanceTracking(window) {
+    return this.avoidance.isTracking(window);
   }
 
   flushPendingNotes() {
@@ -139,6 +196,7 @@ export class WindowManager {
     this.finishShelfNoteDrag(false);
     this.cancelShelfHoverExpansion();
     this.cancelShelfDropExpansion();
+    this.avoidance.dispose();
     const pendingWindowIds = new Set([...this.boundsSaveTimers.keys(), ...this.resizeSessions.keys()]);
     for (const id of pendingWindowIds) this.flushPendingBounds(id);
     this.resizeSessions.clear();
@@ -255,6 +313,7 @@ export class WindowManager {
     window.on("closed", () => {
       this.cancelAnimation(window);
       this.cancelPendingBounds(note.id);
+      this.avoidance.forget(window);
       this.resizeSessions.delete(note.id);
       this.moveSessions.delete(note.id);
       if (this.shelfNoteDragSession?.id === note.id) this.shelfNoteDragSession = null;
@@ -934,6 +993,7 @@ export class WindowManager {
     });
     shelf.on("closed", () => {
       this.shelfMoveSession = null;
+      this.avoidance.forget(shelf);
       if (this.shelfWindow === shelf) this.shelfWindow = null;
     });
     return shelf;
@@ -941,6 +1001,8 @@ export class WindowManager {
 
   async setShelfExpanded(expanded) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
+    // 避让期间侧边架位置由避让服务托管, 避免两套布局动画互相覆盖.
+    if (this.avoidance.isActive()) return;
     if (!expanded && (this.shelfNoteDragSession || this.moveSessions.size > 0)) return;
     this.cancelHideGroup();
     if (expanded) this.cancelShelfDropExpansion();
@@ -1535,6 +1597,8 @@ export class WindowManager {
     if (this.store.isDocked(id)) return;
     const window = this.windows.get(id);
     if (!window || window.isDestroyed()) return;
+    // 避让期间的临时位置不写回配置, 保证恢复后的位置与避让前完全一致.
+    if (this.avoidance.isTracking(window)) return;
     if (this.animatingWindows.has(window.id)) return;
     const state = this.store.getWindowState(id);
     const bounds = window.getBounds();
