@@ -68,7 +68,7 @@ export class WindowManager {
     this.avoidance = new AvoidanceService({
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
-      getFocusedWindow: () => this.getActiveWindow(),
+      getFocusedWindow: () => this.getAvoidanceEditingWindow(),
       displayFor: (bounds) => {
         const display = screen.getDisplayMatching(bounds);
         return { bounds: display.bounds, workArea: display.workArea };
@@ -99,14 +99,14 @@ export class WindowManager {
     return this.avoidance.finish();
   }
 
-  // 参与避让的窗口: 可见便签窗口与侧边架, 排除聚焦、拖动/缩放、尺寸动画中的窗口.
+  // 参与避让的窗口: 可见便签窗口与侧边架, 排除正在展开编辑、拖动/缩放、尺寸动画中的窗口.
   avoidanceTargetCandidates() {
-    const focused = this.getActiveWindow();
+    const active = this.getActiveWindow();
     const targets = [];
     for (const [id, window] of this.windows) {
       if (window.isDestroyed() || !window.isVisible()) continue;
-      // 获得焦点的便签正在被使用, 不参与避让.
-      if (window === focused) continue;
+      // 展开且正在编辑的便签不参与避让; 收起的小条仍然让开.
+      if (this.isNoteBeingEdited(id, window, active)) continue;
       if (this.moveSessions.has(id) || this.resizeSessions.has(id) || this.transitioningNotes.has(id)) continue;
       if (this.animatingWindows.has(window.id)) continue;
       targets.push({ key: id, window });
@@ -117,17 +117,39 @@ export class WindowManager {
       && !shelf.isDestroyed()
       && shelf.isVisible()
       && !this.animatingWindows.has(shelf.id)
-      && !this.isShelfBeingEdited(shelf, focused)
+      && !this.isShelfBeingEdited(shelf, active)
     ) {
       targets.push({ key: "shelf", window: shelf });
     }
     return targets;
   }
 
+  // 展开状态且正在交互的便签才算"正在编辑", 收起的小条继续参与避让.
+  isNoteBeingEdited(id, window, active) {
+    if (this.store.getWindowState(id).collapsed) return false;
+    return window === active;
+  }
+
+  // 避让循环里"正在编辑"的窗口: 同样只认展开状态的便签, 收起的小条继续被推开.
+  getAvoidanceEditingWindow() {
+    const active = this.getActiveWindow();
+    if (!active || active.isDestroyed()) return null;
+    const noteId = this.noteIdForWindow(active);
+    if (noteId && this.store.getWindowState(noteId).collapsed) return null;
+    return active;
+  }
+
+  noteIdForWindow(window) {
+    for (const [id, candidate] of this.windows) {
+      if (candidate === window) return id;
+    }
+    return null;
+  }
+
   // 侧边架展开并托管着便签时, 整个侧边架都在编辑区里, 不能避开.
-  isShelfBeingEdited(shelf, focused) {
+  isShelfBeingEdited(shelf, active) {
     if (this.shelfExpanded && this.activeDockedId) return true;
-    return shelf === focused;
+    return shelf === active;
   }
 
   isAvoidanceTracking(window) {
