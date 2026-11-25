@@ -320,6 +320,11 @@
   accent-color: #647759;
 }
 
+/* 子配置: 整行往右缩进, 表明它属于上面的避让按键. */
+.shortcut-row-child {
+  padding-left: 18px;
+}
+
 .shortcut-select:disabled {
   cursor: default;
   opacity: 0.38;

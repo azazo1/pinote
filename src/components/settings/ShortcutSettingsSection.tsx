@@ -205,7 +205,7 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
               ))}
             </select>
           </div>
-          <div className="shortcut-row shortcut-row-single">
+          <div className="shortcut-row shortcut-row-single shortcut-row-child">
             <div className="shortcut-name">
               <strong>30 秒后自动取消</strong>
               <span className="shortcut-hint">
