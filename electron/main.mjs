@@ -129,7 +129,7 @@ function startApplication() {
       platform: process.platform,
       getBindings: () => store.getPreferences().shortcuts,
       saveBindings: (shortcuts) => store.updatePreferences({ shortcuts }),
-      execute: (id) => executeShortcut(id, BrowserWindow.getFocusedWindow()),
+      execute: (id) => executeShortcut(id),
       installMenu,
       broadcast: broadcastSettings,
     });
@@ -383,9 +383,18 @@ function installMenu(bindings) {
       id,
       label,
       ...(binding?.accelerator && !binding.global ? { accelerator: binding.accelerator } : {}),
-      click: (_menuItem, focusedWindow) => executeShortcut(id, focusedWindow),
+      click: () => executeShortcut(id),
     };
   };
+  // 编辑菜单不依赖 Electron 的 focusedWebContents. 快捷键不注册到系统, 让按键直接
+  // 到达页面由编辑器自己处理; 菜单点击则按"用户最近操作的窗口"分发.
+  const editItem = (id, label, accelerator, click) => ({
+    id,
+    label,
+    accelerator,
+    registerAccelerator: false,
+    click,
+  });
   const template = [
     {
       label: "Pinote",
@@ -424,12 +433,20 @@ function installMenu(bindings) {
         item("sync-now"),
       ],
     },
-    { label: "编辑", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
+    { label: "编辑", submenu: [
+      editItem("edit-undo", "撤销", "CommandOrControl+Z", () => sendEditCommand("edit-undo")),
+      editItem("edit-redo", "重做", "CommandOrControl+Shift+Z", () => sendEditCommand("edit-redo")),
+      { type: "separator" },
+      editItem("edit-cut", "剪切", "CommandOrControl+X", () => runEditAction("cut")),
+      editItem("edit-copy", "复制", "CommandOrControl+C", () => runEditAction("copy")),
+      editItem("edit-paste", "粘贴", "CommandOrControl+V", () => runEditAction("paste")),
+      editItem("edit-select-all", "全选", "CommandOrControl+A", () => runEditAction("selectAll")),
+    ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function executeShortcut(id, focusedWindow) {
+function executeShortcut(id) {
   if (quitStarted) return;
   if (id === "open-main-window") {
     windows.openMainWindow();
@@ -451,6 +468,8 @@ function executeShortcut(id, focusedWindow) {
     void sync.syncNow().catch(() => {});
     return;
   }
+  // 便签是 macOS panel 窗口时 Electron 的 focusedWindow 并不可靠, 统一用交互记录.
+  const focusedWindow = windows.getActiveWindow();
   if (id === "close-window") {
     if (!focusedWindow) return;
     if (focusedWindow === windows.shelfWindow) {
@@ -464,6 +483,26 @@ function executeShortcut(id, focusedWindow) {
   if (!NOTE_COMMANDS.has(id) || !focusedWindow || focusedWindow === windows.mainWindow) return;
   if (focusedWindow === windows.shelfWindow && !windows.activeDockedId) return;
   focusedWindow.webContents.send("app:command", id);
+}
+
+function sendEditCommand(command) {
+  const window = windows.getActiveWindow();
+  if (!window || window.isDestroyed()) return;
+  // 主窗口里只有搜索框等原生输入, 交给 webContents 自己撤销即可.
+  if (window === windows.mainWindow) {
+    if (command === "edit-redo") window.webContents.redo();
+    else window.webContents.undo();
+    return;
+  }
+  window.webContents.send("app:command", command);
+}
+
+// 剪切/复制/粘贴/全选直接作用在"当前便签"的 webContents 上, 而不是系统焦点所在的窗口.
+function runEditAction(action) {
+  const window = windows.getActiveWindow();
+  if (!window || window.isDestroyed()) return;
+  const method = window.webContents[action];
+  if (typeof method === "function") method.call(window.webContents);
 }
 
 function sendMainCommand(command) {

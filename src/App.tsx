@@ -293,6 +293,21 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
     });
   }, [noteId]);
 
+  // 撤销/重做优先作用在编辑器自己的历史上. 浏览器原生的撤销栈是整个文档共享的,
+  // 直接让它处理会把之前编辑过的别的便签内容也撤回来.
+  const runEditorHistory = useCallback((action: "undo" | "redo") => {
+    const editor = editorRef.current;
+    const active = document.activeElement;
+    const nativeInput = active instanceof HTMLTextAreaElement
+      || (active instanceof HTMLInputElement && !editor?.contains(active));
+    if (!editor || nativeInput) {
+      document.execCommand(action);
+      return;
+    }
+    if (action === "undo") editor.undo();
+    else editor.redo();
+  }, []);
+
   useEffect(() => {
     void window.noteAPI.getNote(noteId).then((result) => {
       const loaded = result.note;
@@ -327,6 +342,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
         case "close-window": closeWindow(); break;
         case "focus-title": focusAfterExpand(() => titleInputRef.current?.focus()); break;
         case "focus-editor": focusAfterExpand(() => editorRef.current?.focus()); break;
+        case "edit-undo": runEditorHistory("undo"); break;
+        case "edit-redo": runEditorHistory("redo"); break;
         case "toggle-collapse": toggleCollapse(); break;
         case "toggle-pin": togglePinned(); break;
         case "toggle-dock": toggleDock(); break;
@@ -374,6 +391,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, NoteWorkspaceProps>
     focusAfterExpand,
     noteId,
     queueContentPatch,
+    runEditorHistory,
     setCurrentInlineTags,
     toggleCollapse,
     toggleColorPicker,

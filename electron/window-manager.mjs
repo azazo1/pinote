@@ -40,6 +40,7 @@ export class WindowManager {
     this.showDock = showDock;
     this.hideDock = hideDock;
     this.isAppActive = isAppActive ?? (() => Boolean(BrowserWindow.getFocusedWindow()));
+    this.activeWindow = null;
     this.windows = new Map();
     this.mainWindow = null;
     this.shelfWindow = null;
@@ -67,7 +68,7 @@ export class WindowManager {
     this.avoidance = new AvoidanceService({
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
-      getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
+      getFocusedWindow: () => this.getActiveWindow(),
       displayFor: (bounds) => {
         const display = screen.getDisplayMatching(bounds);
         return { bounds: display.bounds, workArea: display.workArea };
@@ -100,7 +101,7 @@ export class WindowManager {
 
   // 参与避让的窗口: 可见便签窗口与侧边架, 排除聚焦、拖动/缩放、尺寸动画中的窗口.
   avoidanceTargetCandidates() {
-    const focused = BrowserWindow.getFocusedWindow();
+    const focused = this.getActiveWindow();
     const targets = [];
     for (const [id, window] of this.windows) {
       if (window.isDestroyed() || !window.isVisible()) continue;
@@ -233,6 +234,7 @@ export class WindowManager {
     this.mainWindow = window;
     this.loadRenderer(window, { view: "main" });
     window.once("ready-to-show", () => window.show());
+    window.on("focus", () => this.markActiveWindow(window));
     window.webContents.on("did-finish-load", () => {
       window.webContents.send("notes:list", this.store.listSummaries());
     });
@@ -257,6 +259,7 @@ export class WindowManager {
       window.on("session-end", () => this.prepareToQuit());
     }
     window.on("closed", () => {
+      if (this.activeWindow === window) this.activeWindow = null;
       if (this.mainWindow === window) this.mainWindow = null;
     });
     log.info("已创建主窗口");
@@ -311,6 +314,10 @@ export class WindowManager {
     });
     window.on("resize", () => this.schedulePersistBounds(note.id));
     window.on("move", () => this.handleWindowMove(note.id));
+    window.on("focus", () => this.markActiveWindow(window));
+    window.on("hide", () => {
+      if (this.activeWindow === window) this.activeWindow = null;
+    });
     window.on("close", () => this.flushPendingBounds(note.id));
     window.on("closed", () => {
       this.cancelAnimation(window);
@@ -318,6 +325,7 @@ export class WindowManager {
       this.avoidance.forget(window);
       this.resizeSessions.delete(note.id);
       this.moveSessions.delete(note.id);
+      if (this.activeWindow === window) this.activeWindow = null;
       if (this.shelfNoteDragSession?.id === note.id) this.shelfNoteDragSession = null;
       this.transitioningNotes.delete(note.id);
       if (this.windows.get(note.id) === window) this.windows.delete(note.id);
@@ -415,7 +423,7 @@ export class WindowManager {
   }
 
   createNearFocused() {
-    const focused = BrowserWindow.getFocusedWindow();
+    const focused = this.getActiveWindow();
     const bounds = focused && focused !== this.shelfWindow && focused !== this.mainWindow ? focused.getBounds() : null;
     const note = this.store.createDraft({
       x: bounds ? bounds.x + 28 : undefined,
@@ -602,13 +610,36 @@ export class WindowManager {
     return true;
   }
 
+  // macOS 的 panel 便签窗口并不总被 Electron 视为 focused, 因此不能用
+  // BrowserWindow.getFocusedWindow() 判断"当前便签". 这里记录用户最近实际操作的窗口,
+  // 菜单命令与快捷键都按这个记录分发, 避免作用到上一个便签.
+  markActiveWindow(window) {
+    if (!window || window.isDestroyed()) return;
+    if (this.activeWindow !== window) {
+      this.activeWindow = window;
+      log.debug("当前操作窗口已切换", { windowId: window.id });
+    }
+  }
+
+  getActiveWindow() {
+    const active = this.activeWindow;
+    if (active && !active.isDestroyed()) return active;
+    this.activeWindow = null;
+    return BrowserWindow.getFocusedWindow();
+  }
+
   focusForEditing(window) {
+    if (!window || window.isDestroyed()) return;
+    // 用户每一次显式聚焦都同步更新"当前便签", 不依赖窗口系统报告 focus 状态.
+    this.markActiveWindow(window);
     if (!window.isFocusable()) window.setFocusable(true);
     // macOS 的 panel 可在其他应用仍处于前台时成为 key window.
+    // 点击勾选框这类非文本控件时 panel 可能不会自动成为键盘窗口, 因此这里强制聚焦,
+    // 不用 isFocused() 的返回值做门禁, 免得把键盘焦点留在上一张便签上.
     const needsActivation = process.platform === "darwin" && !this.isAppActive();
     if (needsActivation) app.focus({ steal: true });
-    if (needsActivation || !window.isFocused()) window.focus();
-    if (!window.webContents.isFocused()) window.webContents.focus();
+    window.focus();
+    window.webContents.focus();
   }
 
   shouldDockAtShelf(point, proximityHysteresis = 0) {
@@ -1010,9 +1041,11 @@ export class WindowManager {
         this.armShelfHoverExpansion();
       }
     });
+    shelf.on("focus", () => this.markActiveWindow(shelf));
     shelf.on("closed", () => {
       this.shelfMoveSession = null;
       this.avoidance.forget(shelf);
+      if (this.activeWindow === shelf) this.activeWindow = null;
       if (this.shelfWindow === shelf) this.shelfWindow = null;
     });
     return shelf;

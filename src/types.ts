@@ -74,6 +74,8 @@ export type AppCommand =
   | "open-settings"
   | "focus-title"
   | "focus-editor"
+  | "edit-undo"
+  | "edit-redo"
   | "toggle-collapse"
   | "toggle-pin"
   | "toggle-dock"

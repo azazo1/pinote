@@ -1,4 +1,4 @@
-import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
+import { history, historyKeymap, redo, standardKeymap, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorSelection, EditorState, StateEffect, type Range } from "@codemirror/state";
@@ -31,6 +31,9 @@ interface NoteEditorProps {
 
 export interface NoteEditorHandle {
   focus: () => void;
+  undo: () => void;
+  redo: () => void;
+  contains: (node: Node | null) => boolean;
 }
 
 const refreshMarkdownPreview = StateEffect.define<void>();
@@ -223,6 +226,15 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
+    undo: () => {
+      const view = viewRef.current;
+      if (view) undo(view);
+    },
+    redo: () => {
+      const view = viewRef.current;
+      if (view) redo(view);
+    },
+    contains: (node) => Boolean(node && viewRef.current?.dom.contains(node)),
   }), []);
 
   useEffect(() => {

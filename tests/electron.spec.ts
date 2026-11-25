@@ -1165,3 +1165,74 @@ test("主窗口状态栏可打开更新窗口", async () => {
     await app.close();
   }
 });
+
+test("菜单命令作用在最后点击的便签上", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-active-note-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const main = app.windows().find((page) => page.url().includes("view=main"))!;
+    async function createNote(title: string) {
+      const opened = app.waitForEvent("window");
+      await main.locator(".main-create-button").click();
+      const page = await opened;
+      await page.locator(".title-input").fill(title);
+      return page;
+    }
+    const first = await createNote("A");
+    const second = await createNote("B");
+    await first.locator(".note-editor .cm-content").click();
+    await first.keyboard.type("alpha");
+    // 用户最后操作的是第二张便签, 键盘焦点仍可能留在第一张.
+    await second.locator(".note-editor .cm-content").dispatchEvent("pointerdown", { button: 0 });
+    const focusedUrl = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.webContents.getURL());
+    await expect.poll(focusedUrl).toBe(second.url());
+
+    await app.evaluate(({ Menu }) => Menu.getApplicationMenu()!.getMenuItemById("close-window")!.click());
+    await expect.poll(() => app.windows().includes(second)).toBe(false);
+    await expect(first.locator(".note-editor .cm-content")).toHaveText("alpha");
+  } finally {
+    await app.close();
+  }
+});
+
+test("撤销只作用于当前便签的编辑历史", async () => {
+  const app = await electron.launch({
+    args: ["."],
+    cwd: path.resolve("."),
+    env: { ...process.env, PINOTE_USER_DATA: `/private/tmp/pinote-undo-target-${Date.now()}` },
+  });
+  try {
+    await expect.poll(() => app.windows().some((page) => page.url().includes("view=main"))).toBe(true);
+    const main = app.windows().find((page) => page.url().includes("view=main"))!;
+    async function createNote(title: string) {
+      const opened = app.waitForEvent("window");
+      await main.locator(".main-create-button").click();
+      const page = await opened;
+      await page.locator(".title-input").fill(title);
+      return page;
+    }
+    const first = await createNote("A");
+    const second = await createNote("B");
+    const secondId = new URL(second.url()).searchParams.get("noteId")!;
+    const secondMarkdown = () => second.evaluate(
+      async (id) => (await window.noteAPI.getNote(id)).note?.markdown,
+      secondId,
+    );
+    await first.locator(".note-editor .cm-content").click();
+    await first.keyboard.type("alpha");
+    await second.locator(".note-editor .cm-content").click();
+    await second.keyboard.type("beta");
+    await expect(second.locator(".note-editor .cm-content")).toHaveText("beta");
+    await expect.poll(secondMarkdown).toBe("beta");
+
+    await app.evaluate(({ Menu }) => Menu.getApplicationMenu()!.getMenuItemById("edit-undo")!.click());
+    await expect.poll(secondMarkdown).toBe("");
+    await expect(first.locator(".note-editor .cm-content")).toHaveText("alpha");
+  } finally {
+    await app.close();
+  }
+});
