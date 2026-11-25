@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AVOIDANCE_HOLD_DELAY_MS,
+  AVOIDANCE_LATCH_TIMEOUT_MS,
   AVOIDANCE_RELEASE_DEBOUNCE_MS,
   ModifierWatcher,
 } from "./modifier-watcher.mjs";
@@ -79,6 +80,57 @@ describe("ModifierWatcher", () => {
 
     expect(onRelease).not.toHaveBeenCalled();
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches avoidance when both sides are pressed and toggles it off on the next press", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(1);
+    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
+    expect(onPress).toHaveBeenCalledTimes(1);
+
+    watcher.handleMask(17);
+    watcher.handleMask(16);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 3);
+    expect(onRelease).not.toHaveBeenCalled();
+
+    // 全部松开后依然保持.
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 3);
+    expect(onRelease).not.toHaveBeenCalled();
+
+    // 再次左右同按取消保持.
+    watcher.handleMask(17);
+    expect(onRelease).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+  });
+
+  it("cancels a latch automatically after the timeout", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(17);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+
+    vi.advanceTimersByTime(AVOIDANCE_LATCH_TIMEOUT_MS - 100);
+    expect(onRelease).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    expect(onRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-trigger after cancelling while a key is still held", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(17);
+    watcher.handleMask(16);
+    watcher.handleMask(17);
+    expect(onRelease).toHaveBeenCalledTimes(1);
+
+    // 取消后仍按着右侧, 不应重新开始避让.
+    watcher.handleMask(16);
+    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS * 2);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
   });
 
   it("ignores other modifiers", () => {
