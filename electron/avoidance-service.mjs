@@ -19,6 +19,7 @@ export class AvoidanceService {
   constructor({
     getTargets,
     getCursor,
+    getFocusedWindow = () => null,
     workAreaFor,
     logger = { info() {}, warn() {} },
     smoothTauMs = AVOIDANCE_SMOOTH_TAU_MS,
@@ -29,6 +30,7 @@ export class AvoidanceService {
   } = {}) {
     this.getTargets = getTargets ?? (() => []);
     this.getCursor = getCursor ?? (() => null);
+    this.getFocusedWindow = getFocusedWindow;
     this.workAreaFor = workAreaFor ?? (() => ({ x: 0, y: 0, width: 0, height: 0 }));
     this.logger = logger;
     this.smoothTauMs = smoothTauMs;
@@ -38,6 +40,7 @@ export class AvoidanceService {
     this.now = now;
     this.phase = "idle";
     this.entries = new Map();
+    this.excluded = new Set();
     this.loopTimer = null;
     this.settleDeadline = 0;
     this.lastTickAt = null;
@@ -59,6 +62,7 @@ export class AvoidanceService {
   start() {
     if (this.phase === "field") return false;
     this.phase = "field";
+    this.excluded.clear();
     this.trackTargets();
     if (this.entries.size === 0) {
       this.phase = "idle";
@@ -106,12 +110,18 @@ export class AvoidanceService {
     // 与帧率无关的指数靠近: 60Hz 和 30Hz 下移动速度一致.
     const factor = 1 - Math.exp(-Math.min(elapsed, 64) / this.smoothTauMs);
     const field = this.phase === "field" ? avoidanceField(this.getCursor()) : null;
+    const focused = this.getFocusedWindow() ?? null;
     let moving = false;
 
     for (const entry of [...this.entries.values()]) {
       const { window } = entry;
       if (window.isDestroyed?.()) {
         this.entries.delete(entry.key);
+        continue;
+      }
+      // 托管期间便签被点中(获得焦点): 立刻放它回原位并退出托管, 避免和收起/展开等操作抢窗口尺寸.
+      if (focused && window === focused) {
+        this.releaseEntry(entry);
         continue;
       }
       const current = window.getBounds();
@@ -171,7 +181,7 @@ export class AvoidanceService {
     for (const target of this.getTargets()) {
       const { key, window } = target ?? {};
       if (!key || !window || window.isDestroyed?.() || !isVisible(window)) continue;
-      if (this.entries.has(key)) continue;
+      if (this.excluded.has(window) || this.entries.has(key)) continue;
       const origin = window.getBounds();
       this.entries.set(key, {
         key,
@@ -190,16 +200,38 @@ export class AvoidanceService {
     entry.window.setIgnoreMouseEvents?.(!interactive);
   }
 
-  snapToOrigins() {
-    for (const entry of this.entries.values()) {
-      const { window, origin } = entry;
-      if (!window || window.isDestroyed?.()) continue;
-      window.setBounds?.(origin, false);
-      window.setIgnoreMouseEvents?.(false);
-      entry.interactive = true;
-      entry.target = origin;
-      entry.avoiding = false;
+  // 把某个窗口从托管里放出来, 立刻回到原位, 本轮按住期间不再托管它.
+  // 用户开始拖动/缩放、收起/展开或点击便签时调用, 避免和这些操作抢窗口.
+  release(window) {
+    if (!window) return false;
+    this.excluded.add(window);
+    for (const [key, entry] of this.entries) {
+      if (entry.window !== window) continue;
+      this.entries.delete(key);
+      this.snapEntry(entry);
+      return true;
     }
+    return false;
+  }
+
+  releaseEntry(entry) {
+    this.excluded.add(entry.window);
+    this.entries.delete(entry.key);
+    this.snapEntry(entry);
+  }
+
+  snapEntry(entry) {
+    const { window, origin } = entry;
+    if (!window || window.isDestroyed?.()) return;
+    window.setBounds?.(origin, false);
+    window.setIgnoreMouseEvents?.(false);
+    entry.interactive = true;
+    entry.target = origin;
+    entry.avoiding = false;
+  }
+
+  snapToOrigins() {
+    for (const entry of this.entries.values()) this.snapEntry(entry);
   }
 
   ensureLoop() {
@@ -218,6 +250,7 @@ export class AvoidanceService {
     this.stopLoop();
     this.lastTickAt = null;
     this.entries.clear();
+    this.excluded.clear();
     this.logger.info("便签避让已结束");
   }
 }

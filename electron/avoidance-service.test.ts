@@ -32,11 +32,16 @@ function createFakeWindow(bounds = noteBounds) {
 
 let clock = 0;
 let cursor = { x: 0, y: 0 };
+let focused: FakeWindow | null = null;
 
 function createService(targets: FakeWindow[]) {
   return new AvoidanceService({
-    getTargets: () => targets.map((window) => ({ key: String(targets.indexOf(window)), window })),
+    // 与窗口管理器一致: 聚焦的窗口不参与避让.
+    getTargets: () => targets
+      .filter((window) => window !== focused)
+      .map((window) => ({ key: String(targets.indexOf(window)), window })),
     getCursor: () => cursor,
+    getFocusedWindow: () => focused,
     workAreaFor: () => area,
     now: () => clock,
     logger: { info() {}, warn() {} },
@@ -59,6 +64,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   clock = 0;
   cursor = { x: 0, y: 0 };
+  focused = null;
 });
 
 afterEach(() => {
@@ -131,6 +137,39 @@ describe("AvoidanceService", () => {
     cursor = { x: 380, y: 500 };
     advance(800);
     expect(note.getBounds()).toEqual(noteBounds);
+  });
+
+  it("releases the note when it gains focus", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(200);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+
+    // 避让途中便签被点中: 立刻回原位并退出托管, 把窗口交给后续的收起/展开等操作.
+    focused = note;
+    advance(400);
+
+    expect(note.getBounds()).toEqual(noteBounds);
+    expect(note.ignoring).toBe(false);
+  });
+
+  it("keeps a released window out of the field until the next hold", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(200);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+
+    // 用户开始拖动/收起等操作时释放该窗口: 回到原位, 本轮按住期间不再推开.
+    service.release(note);
+    expect(note.getBounds()).toEqual(noteBounds);
+
+    advance(400);
+    expect(note.getBounds()).toEqual(noteBounds);
+    expect(note.ignoring).toBe(false);
   });
 
   it("returns every note to its exact original position when released", () => {

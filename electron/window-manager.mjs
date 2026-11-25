@@ -67,6 +67,7 @@ export class WindowManager {
     this.avoidance = new AvoidanceService({
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
+      getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
       workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
       logger: log,
     });
@@ -94,38 +95,35 @@ export class WindowManager {
     return this.avoidance.finish();
   }
 
-  // 参与避让的窗口: 可见便签窗口与侧边架, 排除正在展开编辑、正在拖动/缩放的窗口.
+  // 参与避让的窗口: 可见便签窗口与侧边架, 排除聚焦、拖动/缩放、尺寸动画中的窗口.
   avoidanceTargetCandidates() {
     const focused = BrowserWindow.getFocusedWindow();
     const targets = [];
     for (const [id, window] of this.windows) {
       if (window.isDestroyed() || !window.isVisible()) continue;
-      if (this.isNoteBeingEdited(id, window, focused)) continue;
+      // 获得焦点的便签正在被使用, 不参与避让.
+      if (window === focused) continue;
       if (this.moveSessions.has(id) || this.resizeSessions.has(id) || this.transitioningNotes.has(id)) continue;
+      if (this.animatingWindows.has(window.id)) continue;
       targets.push({ key: id, window });
     }
     const shelf = this.shelfWindow;
-    if (shelf && !shelf.isDestroyed() && shelf.isVisible() && !this.isShelfBeingEdited(shelf, focused)) {
+    if (
+      shelf
+      && !shelf.isDestroyed()
+      && shelf.isVisible()
+      && !this.animatingWindows.has(shelf.id)
+      && !this.isShelfBeingEdited(shelf, focused)
+    ) {
       targets.push({ key: "shelf", window: shelf });
     }
     return targets;
   }
 
-  // 展开状态且获得焦点的便签才算"正在编辑", 收起的小条不受影响.
-  isNoteBeingEdited(id, window, focused) {
-    if (this.store.getWindowState(id).collapsed) return false;
-    return this.hasEditingFocus(window, focused);
-  }
-
   // 侧边架展开并托管着便签时, 整个侧边架都在编辑区里, 不能避开.
   isShelfBeingEdited(shelf, focused) {
     if (this.shelfExpanded && this.activeDockedId) return true;
-    return this.hasEditingFocus(shelf, focused);
-  }
-
-  hasEditingFocus(window, focused) {
-    if (window === focused) return true;
-    return typeof window.isFocused === "function" ? window.isFocused() : false;
+    return shelf === focused;
   }
 
   isAvoidanceTracking(window) {
@@ -292,6 +290,8 @@ export class WindowManager {
     const window = new BrowserWindow(options);
 
     this.windows.set(note.id, window);
+    // 刚打开的窗口不参与当前这轮避让, 免得用户新建的便签立刻被推走.
+    this.avoidance.release(window);
     if (process.platform === "darwin") {
       window.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
     }
@@ -355,13 +355,14 @@ export class WindowManager {
   }
 
   closeNote(id) {
+    const window = this.windows.get(id);
+    if (window) this.avoidance.release(window);
     if (this.store.getDockState(id) === "shelf") return this.closeDockedNote(id);
     if (this.store.isDraft(id)) {
       this.remove(id);
       return true;
     }
     if (!this.store.updateWindow(id, { open: false })) return false;
-    const window = this.windows.get(id);
     if (this.activeDockedId === id) this.activeDockedId = null;
     this.flushPendingBounds(id);
     this.windows.delete(id);
@@ -443,8 +444,12 @@ export class WindowManager {
   toggleCollapse(id) {
     const state = this.store.getWindowState(id);
     const window = this.windows.get(id);
+    // 避让中先让窗口回到原位, 再执行收起/展开, 避免两套尺寸动画互相覆盖.
+    if (window) this.avoidance.release(window);
     if (this.store.getDockState(id) === "shelf") {
       const collapsed = !state.collapsed;
+      // 侧边架同样先退出托管, 收起/展开才会真正动窗口.
+      if (this.shelfWindow) this.avoidance.release(this.shelfWindow);
       this.store.updateWindow(id, { collapsed });
       if (this.shelfWindow && !this.shelfWindow.isDestroyed()) {
         this.shelfWindow.webContents.send("note:collapsed", collapsed);
@@ -500,6 +505,8 @@ export class WindowManager {
       || window.isDestroyed()
       || window.webContents !== sender
     ) return false;
+    // 用户开始拖动时退出避让托管, 避免逐帧跟随把窗口拉回原位.
+    this.avoidance.release(window);
     this.moveSessions.set(id, {
       senderId: sender.id,
       nearShelf: false,
@@ -748,6 +755,8 @@ export class WindowManager {
       window.webContents !== sender ||
       this.store.getWindowState(id).collapsed
     ) return;
+    // 用户开始缩放时退出避让托管, 两种尺寸控制不会互相覆盖.
+    this.avoidance.release(window);
     this.cancelAnimation(window);
     this.cancelPendingBounds(id);
     window.setMinimumSize(COLLAPSED_WIDTH, 180);
@@ -785,6 +794,8 @@ export class WindowManager {
   setNoteArchived(id, archived) {
     const note = this.store.getNote(id);
     if (!note) return null;
+    const target = this.shelfHostedNoteId === id ? this.shelfWindow : this.windows.get(id);
+    if (target) this.avoidance.release(target);
     if (archived && this.store.getDockState(id) === "shelf") {
       this.store.updateWindow(id, { dockState: "free", open: false });
       if (this.activeDockedId === id) this.activeDockedId = null;
@@ -811,6 +822,7 @@ export class WindowManager {
 
   remove(id) {
     const window = this.windows.get(id);
+    if (window) this.avoidance.release(window);
     if (!this.store.deleteNote(id)) return;
     this.draftFocusOwners.delete(id);
     this.cancelPendingBounds(id);
@@ -845,6 +857,7 @@ export class WindowManager {
     const note = this.store.getNote(id);
     if (!note || note.archivedAt !== null || this.store.isDocked(id)) return false;
     const window = this.windows.get(id);
+    if (window) this.avoidance.release(window);
     if (persist) this.persistBounds(id);
     const mode = this.getDockMode();
     this.store.setDockState(id, mode);
@@ -875,6 +888,8 @@ export class WindowManager {
     const previousMode = this.store.getDockState(id);
     if (previousMode !== "shelf" && previousMode !== "inline") return false;
     let window = this.windows.get(id);
+    if (window) this.avoidance.release(window);
+    if (this.shelfWindow) this.avoidance.release(this.shelfWindow);
     if (window && !window.isDestroyed()) this.finishNoteTransition(id, window);
     if (this.shelfNoteDragSession?.id === id) this.shelfNoteDragSession = null;
     this.store.setDockState(id, "free");
@@ -969,6 +984,8 @@ export class WindowManager {
     };
     const shelf = new BrowserWindow(options);
     this.shelfWindow = shelf;
+    // 刚出现的侧边架同样不参与当前这轮避让.
+    this.avoidance.release(shelf);
     if (process.platform === "darwin") {
       shelf.setVisibleOnAllWorkspaces(true, MACOS_WORKSPACE_OPTIONS);
     }
@@ -1000,8 +1017,8 @@ export class WindowManager {
 
   async setShelfExpanded(expanded) {
     if (this.getDockMode() !== "shelf" || this.store.listDockedNotes("shelf").length === 0) return;
-    // 避让期间侧边架位置由避让服务托管, 避免两套布局动画互相覆盖.
-    if (this.avoidance.isActive()) return;
+    // 侧边架被避让托管时位置由避让服务接管, 避免两套布局动画互相覆盖.
+    if (this.avoidance.isTracking(this.shelfWindow)) return;
     if (!expanded && (this.shelfNoteDragSession || this.moveSessions.size > 0)) return;
     this.cancelHideGroup();
     if (expanded) this.cancelShelfDropExpansion();
@@ -1083,6 +1100,7 @@ export class WindowManager {
     }
     this.cancelHideGroup();
     this.cancelAnimation(shelf);
+    this.avoidance.release(shelf);
     const display = screen.getDisplayMatching(shelf.getBounds());
     const startBounds = this.shelfBounds(display, this.shelfExpanded);
     shelf.setBounds(startBounds, false);
@@ -1479,6 +1497,7 @@ export class WindowManager {
 
   async closeDockedNote(id) {
     if (this.store.getDockState(id) !== "shelf") return false;
+    if (this.shelfHostedNoteId === id && this.shelfWindow) this.avoidance.release(this.shelfWindow);
     if (this.shelfHostedNoteId === id) await this.flushPendingNote(id);
     if (this.store.isDraft(id)) {
       this.remove(id);
@@ -1584,6 +1603,8 @@ export class WindowManager {
   }
 
   constrainAllWindows() {
+    // 显示器变化会重排所有窗口, 先结束避让, 避免两套位置来源互相覆盖.
+    this.avoidance.dispose();
     this.restoreSavedPositions();
     if (this.getDockMode() === "shelf" && this.store.listDockedNotes("shelf").length > 0) {
       this.setShelfExpanded(this.shelfExpanded);
