@@ -1,46 +1,52 @@
 import {
-  AVOIDANCE_STAGGER_MS,
-  avoidanceExitBounds,
-  avoidanceExitDuration,
-  avoidanceReturnDuration,
-  boundsDistance,
-  easeInQuad,
-  easeOutCubic,
-  isAvoidanceTarget,
+  AVOIDANCE_FOLLOW_MS,
+  AVOIDANCE_RELEASE_MARGIN,
+  AVOIDANCE_SMOOTH_TAU_MS,
+  approachBounds,
+  avoidanceField,
+  avoidancePushCandidates,
+  boundsSettled,
+  rectIntersectsCircle,
 } from "./windowing/avoidance.mjs";
 
-const FRAME_MS = 16;
-const AVOIDANCE_CHANNEL = "avoidance:state";
-// 恢复动画的最后兜底, 防止某张便签的动画因异常停在屏幕外.
-const RESTORE_FALLBACK_MARGIN_MS = 400;
+// 松开后的还原超时: 万一某个窗口卡住, 直接吸附回原位.
+const SETTLE_TIMEOUT_MS = 1_500;
 
-// 便签避让: 按住修饰键时, 鼠标附近的便签依次飘出屏幕; 松开后按记录的原位精确回位.
-// 窗口位置只在内存中记录, 避让全程不写回配置, 因此不会污染便签的真实位置.
+// 便签避让: 按住修饰键时形成一个跟着鼠标走的圆形立场, 与立场相交的便签被推开;
+// 鼠标继续追, 便签就继续让; 鼠标离开后回到原位. 松开修饰键后全部回原位.
+// 窗口位置只在内存中记录, 避让全程不写回配置.
 export class AvoidanceService {
   constructor({
     getTargets,
+    getCursor,
     workAreaFor,
     logger = { info() {}, warn() {} },
+    smoothTauMs = AVOIDANCE_SMOOTH_TAU_MS,
+    followMs = AVOIDANCE_FOLLOW_MS,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
     now = () => performance.now(),
-    setTimer = setTimeout,
-    clearTimer = clearTimeout,
   } = {}) {
     this.getTargets = getTargets ?? (() => []);
+    this.getCursor = getCursor ?? (() => null);
     this.workAreaFor = workAreaFor ?? (() => ({ x: 0, y: 0, width: 0, height: 0 }));
     this.logger = logger;
+    this.smoothTauMs = smoothTauMs;
+    this.followMs = followMs;
+    this.setIntervalFn = setIntervalFn;
+    this.clearIntervalFn = clearIntervalFn;
     this.now = now;
-    this.setTimer = setTimer;
-    this.clearTimer = clearTimer;
     this.phase = "idle";
     this.entries = new Map();
-    this.fallbackTimer = null;
+    this.loopTimer = null;
+    this.settleDeadline = 0;
+    this.lastTickAt = null;
   }
 
   isActive() {
     return this.phase !== "idle";
   }
 
-  // 便签是否正处于避让托管中, 用于阻止把避让位置写回持久化状态.
   isTracking(window) {
     if (!window || this.phase === "idle") return false;
     for (const entry of this.entries.values()) {
@@ -49,223 +55,177 @@ export class AvoidanceService {
     return false;
   }
 
-  begin(pointer) {
-    if (!Number.isFinite(pointer?.x) || !Number.isFinite(pointer?.y)) return false;
-    if (this.phase === "escaping") return false;
-    this.cancelFallback();
-
-    if (this.phase === "restoring") {
-      // 返回途中再次按住: 保留每张便签的原位, 从当前位置重新飘走.
-      const entries = [...this.entries.values()];
-      for (const entry of entries) this.clearEntryTimers(entry);
-      if (entries.length === 0) {
-        this.phase = "idle";
-        return false;
-      }
-      this.phase = "escaping";
-      this.launchEscape(entries, pointer);
-      return true;
+  // 进入立场模式: 记住所有可避让便签的当前位置, 之后跟着鼠标实时推开.
+  start() {
+    if (this.phase === "field") return false;
+    this.phase = "field";
+    this.trackTargets();
+    if (this.entries.size === 0) {
+      this.phase = "idle";
+      return false;
     }
-
-    const near = [];
-    for (const target of this.getTargets()) {
-      const { key, window } = target ?? {};
-      if (!key || !window || window.isDestroyed?.() || !isVisible(window)) continue;
-      if (!isAvoidanceTarget(pointer, window.getBounds())) continue;
-      near.push({ key, window });
-    }
-    if (near.length === 0) return false;
-    near.sort((left, right) => boundsDistance(left.window.getBounds(), centerBounds(pointer))
-      - boundsDistance(right.window.getBounds(), centerBounds(pointer)));
-
-    this.entries.clear();
-    for (const { key, window } of near) {
-      this.entries.set(key, {
-        key,
-        window,
-        origin: window.getBounds(),
-        startTimer: null,
-        frame: null,
-      });
-    }
-    this.phase = "escaping";
-    this.launchEscape([...this.entries.values()], pointer);
-    this.logger.info("便签开始避让", { count: this.entries.size });
+    this.lastTickAt = null;
+    this.ensureLoop();
+    this.logger.info("便签避让立场已开启", { count: this.entries.size });
     return true;
   }
 
+  // 松开修饰键: 所有便签回到原位, 平滑结束后退出.
   finish() {
-    if (this.phase !== "escaping") return false;
-    this.phase = "restoring";
-    const entries = [...this.entries.values()];
-    let longest = 0;
-    entries.forEach((entry, index) => {
-      this.clearEntryTimers(entry);
-      entry.startTimer = this.setTimer(() => {
-        entry.startTimer = null;
-        if (this.phase !== "restoring") return;
-        this.restoreEntry(entry, index);
-      }, index * AVOIDANCE_STAGGER_MS);
-      longest = Math.max(longest, index * AVOIDANCE_STAGGER_MS);
-    });
-    this.armFallback(longest);
-    this.logger.info("便签正在回到原位", { count: entries.length });
-    return entries.length > 0;
+    if (this.phase !== "field") return false;
+    this.phase = "returning";
+    this.settleDeadline = this.now() + SETTLE_TIMEOUT_MS;
+    this.logger.info("便签正在回到原位", { count: this.entries.size });
+    return true;
   }
 
-  // 窗口被关闭/销毁时调用, 避免继续托管一个不存在的窗口.
   forget(window) {
     for (const [key, entry] of this.entries) {
       if (entry.window !== window) continue;
-      this.clearEntryTimers(entry);
       this.entries.delete(key);
     }
-    if (this.entries.size === 0 && this.phase !== "idle") {
-      this.phase = "idle";
-      this.cancelFallback();
-    }
+    if (this.entries.size === 0 && this.phase !== "idle") this.exit();
   }
 
   // 退出或被禁用时立刻还原, 不做动画.
   dispose() {
-    this.cancelFallback();
+    this.snapToOrigins();
+    this.exit();
+  }
+
+  tick() {
+    if (this.phase === "idle") {
+      this.stopLoop();
+      return;
+    }
+    if (this.phase === "field") this.trackTargets();
+
+    const nowMs = this.now();
+    const elapsed = this.lastTickAt === null ? this.followMs : Math.max(1, nowMs - this.lastTickAt);
+    this.lastTickAt = nowMs;
+    // 与帧率无关的指数靠近: 60Hz 和 30Hz 下移动速度一致.
+    const factor = 1 - Math.exp(-Math.min(elapsed, 64) / this.smoothTauMs);
+    const field = this.phase === "field" ? avoidanceField(this.getCursor()) : null;
+    let moving = false;
+
+    for (const entry of [...this.entries.values()]) {
+      const { window } = entry;
+      if (window.isDestroyed?.()) {
+        this.entries.delete(entry.key);
+        continue;
+      }
+      const current = window.getBounds();
+      const target = this.targetFor(entry, current, field);
+      const settled = boundsSettled(current, target);
+      const interactive = settled && isSamePosition(target, entry.origin);
+      this.setInteractive(entry, interactive);
+
+      if (settled) {
+        if (!isSamePosition(current, target)) window.setBounds?.(target, false);
+        continue;
+      }
+      const next = approachBounds(current, target, factor);
+      if (isSamePosition(next, current)) continue;
+      moving = true;
+      window.setBounds?.(next, false);
+    }
+
+    if (this.phase === "returning") {
+      const overdue = nowMs >= this.settleDeadline;
+      if (!moving || overdue) {
+        this.snapToOrigins();
+        this.exit();
+      }
+    }
+  }
+
+  // 目标位置: 始终按"原位"算出立场外的最小旁位, 不按当前位置累加, 因此不会一路往下推.
+  targetFor(entry, current, field) {
+    if (this.phase !== "field" || !field) return entry.origin;
+    const releaseCircle = { ...field, radius: field.radius + AVOIDANCE_RELEASE_MARGIN };
+    const originBlocked = rectIntersectsCircle(entry.origin, field);
+    const currentBlocked = rectIntersectsCircle(current, field);
+
+    if (!entry.avoiding) {
+      if (!originBlocked && !currentBlocked) return entry.origin;
+      entry.avoiding = true;
+    }
+    if (!currentBlocked && !rectIntersectsCircle(entry.origin, releaseCircle)) {
+      entry.avoiding = false;
+      entry.target = entry.origin;
+      return entry.origin;
+    }
+    const pushed = this.pushFrom(entry, entry.origin, field);
+    return pushed ?? entry.origin;
+  }
+
+  pushFrom(entry, bounds, field) {
+    const area = this.workAreaFor(bounds);
+    const candidates = avoidancePushCandidates(bounds, field, area);
+    if (candidates.length === 0) return null;
+    entry.target = candidates[0].target;
+    return entry.target;
+  }
+
+  trackTargets() {
+    for (const target of this.getTargets()) {
+      const { key, window } = target ?? {};
+      if (!key || !window || window.isDestroyed?.() || !isVisible(window)) continue;
+      if (this.entries.has(key)) continue;
+      const origin = window.getBounds();
+      this.entries.set(key, {
+        key,
+        window,
+        origin,
+        target: origin,
+        avoiding: false,
+        interactive: true,
+      });
+    }
+  }
+
+  setInteractive(entry, interactive) {
+    if (entry.interactive === interactive) return;
+    entry.interactive = interactive;
+    entry.window.setIgnoreMouseEvents?.(!interactive);
+  }
+
+  snapToOrigins() {
     for (const entry of this.entries.values()) {
-      this.clearEntryTimers(entry);
       const { window, origin } = entry;
       if (!window || window.isDestroyed?.()) continue;
       window.setBounds?.(origin, false);
       window.setIgnoreMouseEvents?.(false);
-      sendAvoiding(window, false);
+      entry.interactive = true;
+      entry.target = origin;
+      entry.avoiding = false;
     }
+  }
+
+  ensureLoop() {
+    if (this.loopTimer !== null) return;
+    this.loopTimer = this.setIntervalFn(() => this.tick(), this.followMs);
+  }
+
+  stopLoop() {
+    if (this.loopTimer === null) return;
+    this.clearIntervalFn(this.loopTimer);
+    this.loopTimer = null;
+  }
+
+  exit() {
+    this.phase = "idle";
+    this.stopLoop();
+    this.lastTickAt = null;
     this.entries.clear();
-    this.phase = "idle";
+    this.logger.info("便签避让已结束");
   }
-
-  launchEscape(entries, pointer) {
-    const center = centerBounds(pointer);
-    const ordered = [...entries].sort((left, right) => boundsDistance(left.window.getBounds(), center)
-      - boundsDistance(right.window.getBounds(), center));
-    ordered.forEach((entry, index) => {
-      entry.startTimer = this.setTimer(() => {
-        entry.startTimer = null;
-        if (this.phase !== "escaping") return;
-        const window = entry.window;
-        if (window.isDestroyed?.() || !isVisible(window)) {
-          this.entries.delete(entry.key);
-          if (this.entries.size === 0) this.phase = "idle";
-          return;
-        }
-        // 落位前先让鼠标穿透, 移动途中也不会误点便签或抢焦点.
-        window.setIgnoreMouseEvents?.(true);
-        sendAvoiding(window, true);
-        const from = window.getBounds();
-        const to = avoidanceExitBounds(from, this.workAreaFor(from));
-        this.animateEntry(entry, from, to, avoidanceExitDuration(from, to), easeInQuad);
-      }, index * AVOIDANCE_STAGGER_MS);
-    });
-  }
-
-  restoreEntry(entry) {
-    const window = entry.window;
-    if (window.isDestroyed?.()) {
-      this.entries.delete(entry.key);
-      this.finishIfIdle();
-      return;
-    }
-    const from = window.getBounds();
-    const to = entry.origin;
-    sendAvoiding(window, false);
-    this.animateEntry(entry, from, to, avoidanceReturnDuration(from, to), easeOutCubic, () => {
-      window.setBounds?.(to, false);
-      window.setIgnoreMouseEvents?.(false);
-      this.entries.delete(entry.key);
-      this.finishIfIdle();
-    });
-  }
-
-  animateEntry(entry, from, to, duration, easing, onDone) {
-    const startedAt = this.now();
-    const tick = () => {
-      const window = entry.window;
-      if (window.isDestroyed?.() || this.entries.get(entry.key) !== entry) {
-        entry.frame = null;
-        return;
-      }
-      const progress = duration <= 0 ? 1 : Math.min(1, (this.now() - startedAt) / duration);
-      const eased = easing(progress);
-      window.setBounds(interpolateBounds(from, to, eased), false);
-      if (progress < 1) {
-        entry.frame = this.setTimer(tick, FRAME_MS);
-        return;
-      }
-      entry.frame = null;
-      onDone?.();
-    };
-    tick();
-  }
-
-  finishIfIdle() {
-    if (this.entries.size > 0 || this.phase === "idle") return;
-    this.phase = "idle";
-    this.cancelFallback();
-    this.logger.info("便签已全部回到原位");
-  }
-
-  armFallback(staggerMs) {
-    this.cancelFallback();
-    this.fallbackTimer = this.setTimer(() => {
-      this.fallbackTimer = null;
-      if (this.phase === "idle") return;
-      this.logger.warn("便签回到原位的动画超时, 强制还原", { count: this.entries.size });
-      for (const entry of this.entries.values()) {
-        this.clearEntryTimers(entry);
-        const { window, origin } = entry;
-        if (!window || window.isDestroyed?.()) continue;
-        window.setBounds?.(origin, false);
-        window.setIgnoreMouseEvents?.(false);
-        sendAvoiding(window, false);
-      }
-      this.entries.clear();
-      this.phase = "idle";
-    }, staggerMs + AVOIDANCE_STAGGER_MS + 900 + RESTORE_FALLBACK_MARGIN_MS);
-  }
-
-  cancelFallback() {
-    if (this.fallbackTimer === null) return;
-    this.clearTimer(this.fallbackTimer);
-    this.fallbackTimer = null;
-  }
-
-  clearEntryTimers(entry) {
-    if (entry.startTimer !== null) {
-      this.clearTimer(entry.startTimer);
-      entry.startTimer = null;
-    }
-    if (entry.frame !== null) {
-      this.clearTimer(entry.frame);
-      entry.frame = null;
-    }
-  }
-}
-
-function sendAvoiding(window, avoiding) {
-  if (!window?.webContents || window.webContents.isDestroyed?.()) return;
-  window.webContents.send(AVOIDANCE_CHANNEL, Boolean(avoiding));
 }
 
 function isVisible(window) {
   return typeof window.isVisible === "function" ? window.isVisible() : true;
 }
 
-function centerBounds(point) {
-  return { x: point.x, y: point.y, width: 0, height: 0 };
-}
-
-function interpolateBounds(start, target, progress) {
-  return {
-    x: Math.round(start.x + (target.x - start.x) * progress),
-    y: Math.round(start.y + (target.y - start.y) * progress),
-    width: Math.round(start.width + (target.width - start.width) * progress),
-    height: Math.round(start.height + (target.height - start.height) * progress),
-  };
+function isSamePosition(left, right) {
+  return left.x === right.x && left.y === right.y;
 }

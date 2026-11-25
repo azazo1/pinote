@@ -8,7 +8,7 @@
 // 这里只读取 CGEventSource 的修饰键状态, 不注册 event tap, 因此不要求辅助功能权限.
 // 由 Pinote 主进程作为子进程启动, 只用于"按住修饰键让便签避让"这一个交互.
 
-#define POLL_INTERVAL_MICROS 40000
+#define POLL_INTERVAL_MICROS 20000
 
 static int current_modifier_mask(void) {
     CGEventFlags flags = CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);

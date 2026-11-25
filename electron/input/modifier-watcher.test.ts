@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AVOIDANCE_HOLD_DELAY_MS, ModifierWatcher } from "./modifier-watcher.mjs";
+import {
+  AVOIDANCE_HOLD_DELAY_MS,
+  AVOIDANCE_RELEASE_DEBOUNCE_MS,
+  ModifierWatcher,
+} from "./modifier-watcher.mjs";
 
 function createWatcher(overrides = {}) {
   const onPress = vi.fn();
@@ -41,22 +45,40 @@ describe("ModifierWatcher", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 
     watcher.handleMask(1);
-    vi.advanceTimersByTime(40);
+    vi.advanceTimersByTime(20);
     watcher.handleMask(0);
-    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS * 2);
+    vi.advanceTimersByTime(400);
 
     expect(onPress).not.toHaveBeenCalled();
     expect(onRelease).not.toHaveBeenCalled();
   });
 
-  it("releases when the modifier goes up", () => {
+  it("releases after the debounce once the modifier goes up", () => {
     const { watcher, onRelease } = createWatcher();
 
     watcher.handleMask(1);
     vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
     watcher.handleMask(0);
-
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS - 10);
+    expect(onRelease).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(10);
     expect(onRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a momentary release blip while the key is still down", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(1);
+    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
+    expect(onPress).toHaveBeenCalledTimes(1);
+
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(20);
+    watcher.handleMask(1);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 2);
+
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 
   it("ignores other modifiers", () => {
@@ -108,6 +130,7 @@ describe("ModifierWatcher", () => {
     expect(onPress).toHaveBeenCalledTimes(1);
 
     handlers.keyup({ keycode: keycodes.Alt });
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS);
     expect(onRelease).toHaveBeenCalledTimes(1);
     expect(hook.start).toHaveBeenCalledTimes(1);
   });

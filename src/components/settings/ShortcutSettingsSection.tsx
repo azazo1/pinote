@@ -177,7 +177,7 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
                 <span role="alert">{avoidanceError}</span>
               ) : (
                 <span className="shortcut-hint">
-                  按住该键时, 鼠标附近的便签会飘开; 只监听按键, 不拦截, 不抢焦点
+                  按住该键时, 鼠标周围的便签会移开让位; 只监听按键, 不拦截, 不抢焦点
                 </span>
               )}
             </div>

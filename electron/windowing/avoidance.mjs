@@ -1,86 +1,120 @@
-import { isPointNearBounds } from "./shelf-proximity.mjs";
+// 便签避让的几何模型: 以鼠标为中心的圆形"立场".
+// 与立场相交的便签会被推到立场边缘之外, 只移动刚好够的距离, 让立场里露出后面的内容.
 
-// 鼠标离便签多远仍算"在附近", 避免用户必须精确悬停.
-export const AVOIDANCE_PROXIMITY = 24;
-// 便签飘出屏幕后保留的余量, 防止边缘残留一小条像素.
-export const AVOIDANCE_EXIT_MARGIN = 48;
-// 出发与返回的基础时长, 距离越远补得越多, 避免长距离移动速度失真.
-const EXIT_BASE_MS = 320;
-const RETURN_BASE_MS = 280;
-const EXIT_PIXELS_PER_MS = 0.22;
-const RETURN_PIXELS_PER_MS = 0.16;
-export const AVOIDANCE_EXIT_MIN_MS = 340;
-export const AVOIDANCE_EXIT_MAX_MS = 720;
-export const AVOIDANCE_RETURN_MIN_MS = 300;
-export const AVOIDANCE_RETURN_MAX_MS = 620;
-// 多张便签依次出发的间隔, 形成层次而不是整齐划一.
-export const AVOIDANCE_STAGGER_MS = 45;
+export const AVOIDANCE_RADIUS = 140;
+// 便签与立场之间留的间隙, 避免贴着圆周抖动.
+export const AVOIDANCE_GAP = 12;
+// 跟随鼠标的刷新间隔, 与显示器刷新同步, 避免 30Hz 的阶梯感.
+export const AVOIDANCE_FOLLOW_MS = 16;
+// 平滑移动的时间常数: 每帧向目标靠近的比例由经过的时间决定, 与帧率无关.
+export const AVOIDANCE_SMOOTH_TAU_MS = 60;
+// 便签要完全离开这个加宽的圆才判定为"不再遮蔽", 避免边缘微动时反复推回/收回.
+export const AVOIDANCE_RELEASE_MARGIN = 28;
+// 位移小于该距离就认为到位, 停止重复 setBounds.
+export const AVOIDANCE_SETTLE_PX = 2;
 
-// 便签是否在鼠标附近, 需要让位.
-export function isAvoidanceTarget(point, bounds, proximity = AVOIDANCE_PROXIMITY) {
-  return isPointNearBounds(point, bounds, proximity);
+// 鼠标当前位置对应的立场圆, 半径包含让位间隙.
+export function avoidanceField(pointer) {
+  if (!Number.isFinite(pointer?.x) || !Number.isFinite(pointer?.y)) return null;
+  return { x: pointer.x, y: pointer.y, radius: AVOIDANCE_RADIUS + AVOIDANCE_GAP };
 }
 
-// 取离便签中心最近的屏幕边缘, 便签朝那一侧飘走; 平局时优先向下, 更像落叶.
-export function avoidanceExitDirection(bounds, area) {
-  if (!isFiniteBounds(bounds) || !isFiniteBounds(area)) return "bottom";
-  const centerX = bounds.x + bounds.width / 2;
-  const centerY = bounds.y + bounds.height / 2;
-  const distances = {
-    bottom: area.y + area.height - centerY,
-    left: centerX - area.x,
-    right: area.x + area.width - centerX,
-    top: centerY - area.y,
+// 矩形与立场是否相交, 用"圆心到矩形的最近点"判断.
+export function rectIntersectsCircle(bounds, circle) {
+  if (!isFiniteBounds(bounds) || !circle) return false;
+  const nearestX = clampValue(circle.x, bounds.x, bounds.x + bounds.width);
+  const nearestY = clampValue(circle.y, bounds.y, bounds.y + bounds.height);
+  const deltaX = circle.x - nearestX;
+  const deltaY = circle.y - nearestY;
+  return deltaX * deltaX + deltaY * deltaY < circle.radius * circle.radius;
+}
+
+// 把便签推到立场外的所有可行位置, 按位移从小到大排序.
+// 每个候选都完整留在屏幕内, 并且与立场不相交.
+export function avoidancePushCandidates(bounds, circle, area) {
+  if (!isFiniteBounds(bounds) || !circle) return [];
+  const radius = circle.radius;
+  const raw = [
+    { direction: "left", x: (circle.x - radius) - bounds.width, y: bounds.y },
+    { direction: "right", x: circle.x + radius, y: bounds.y },
+    { direction: "up", x: bounds.x, y: (circle.y - radius) - bounds.height },
+    { direction: "down", x: bounds.x, y: circle.y + radius },
+  ];
+  return raw
+    .map(({ direction, x, y }) => {
+      const target = clampBoundsToArea({ x, y, width: bounds.width, height: bounds.height }, area);
+      return {
+        direction,
+        target,
+        distance: Math.hypot(target.x - bounds.x, target.y - bounds.y),
+      };
+    })
+    .filter((candidate) => !rectIntersectsCircle(candidate.target, circle))
+    .sort((left, right) => left.distance - right.distance);
+}
+
+// 把便签推到立场外: 取位移最小的可行位置.
+export function avoidancePushTarget(bounds, circle, area) {
+  if (!isFiniteBounds(bounds) || !circle) return bounds;
+  if (!rectIntersectsCircle(bounds, circle)) return bounds;
+  const candidates = avoidancePushCandidates(bounds, circle, area);
+  if (candidates.length > 0) return candidates[0].target;
+  // 屏幕太小或便签太大时无法完全避开, 退回离圆心最远的一个方向, 尽力露出立场.
+  return farthestFromCircle(bounds, circle, area) ?? bounds;
+}
+
+// 逐帧靠近目标位置, 到位后直接吸附, 避免永远差一像素.
+// smoothing 由服务按经过的时间计算, 保证不同帧率下速度一致.
+export function approachBounds(current, target, smoothing = 0.2) {
+  const deltaX = target.x - current.x;
+  const deltaY = target.y - current.y;
+  if (boundsSettled(current, target)) {
+    return { ...target };
+  }
+  return {
+    x: Math.round(current.x + deltaX * smoothing),
+    y: Math.round(current.y + deltaY * smoothing),
+    width: target.width,
+    height: target.height,
   };
-  let direction = "bottom";
-  for (const candidate of ["left", "right", "top"]) {
-    if (distances[candidate] < distances[direction]) direction = candidate;
+}
+
+export function boundsSettled(current, target, tolerance = AVOIDANCE_SETTLE_PX) {
+  return Math.abs(current.x - target.x) <= tolerance && Math.abs(current.y - target.y) <= tolerance;
+}
+
+function farthestFromCircle(bounds, circle, area) {
+  const radius = circle.radius;
+  const raw = [
+    { x: (circle.x - radius) - bounds.width, y: bounds.y },
+    { x: circle.x + radius, y: bounds.y },
+    { x: bounds.x, y: (circle.y - radius) - bounds.height },
+    { x: bounds.x, y: circle.y + radius },
+  ];
+  let best = null;
+  let bestDistance = -1;
+  for (const position of raw) {
+    const target = clampBoundsToArea({ ...position, width: bounds.width, height: bounds.height }, area);
+    const nearestX = clampValue(circle.x, target.x, target.x + target.width);
+    const nearestY = clampValue(circle.y, target.y, target.y + target.height);
+    const distance = Math.hypot(circle.x - nearestX, circle.y - nearestY);
+    if (distance > bestDistance) {
+      best = target;
+      bestDistance = distance;
+    }
   }
-  return direction;
+  return best;
 }
 
-// 飘走后的落点: 整个窗口移到屏幕外, 并带一点侧向漂移, 让路径不那么笔直.
-export function avoidanceExitBounds(bounds, area) {
-  if (!isFiniteBounds(bounds) || !isFiniteBounds(area)) return bounds;
-  const direction = avoidanceExitDirection(bounds, area);
-  const driftX = Math.round(Math.min(64, bounds.width * 0.15));
-  const driftY = Math.round(Math.min(64, bounds.height * 0.12));
-  const size = { width: bounds.width, height: bounds.height };
-  switch (direction) {
-    case "left":
-      return { x: area.x - bounds.width - AVOIDANCE_EXIT_MARGIN, y: bounds.y + driftY, ...size };
-    case "right":
-      return { x: area.x + area.width + AVOIDANCE_EXIT_MARGIN, y: bounds.y + driftY, ...size };
-    case "top":
-      return { x: bounds.x + driftX, y: area.y - bounds.height - AVOIDANCE_EXIT_MARGIN, ...size };
-    default:
-      return { x: bounds.x + driftX, y: area.y + area.height + AVOIDANCE_EXIT_MARGIN, ...size };
-  }
-}
-
-export function avoidanceExitDuration(from, to) {
-  return Math.round(clamp(EXIT_BASE_MS + boundsDistance(from, to) * EXIT_PIXELS_PER_MS, AVOIDANCE_EXIT_MIN_MS, AVOIDANCE_EXIT_MAX_MS));
-}
-
-export function avoidanceReturnDuration(from, to) {
-  return Math.round(clamp(RETURN_BASE_MS + boundsDistance(from, to) * RETURN_PIXELS_PER_MS, AVOIDANCE_RETURN_MIN_MS, AVOIDANCE_RETURN_MAX_MS));
-}
-
-// 出发先慢后快, 像纸片被吹走; 返回先快后慢, 像落回原位.
-export function easeInQuad(progress) {
-  return progress * progress;
-}
-
-export function easeOutCubic(progress) {
-  return 1 - Math.pow(1 - progress, 3);
-}
-
-export function boundsDistance(left, right) {
-  if (!isFiniteBounds(left) || !isFiniteBounds(right)) return 0;
-  return Math.hypot(
-    left.x + left.width / 2 - (right.x + right.width / 2),
-    left.y + left.height / 2 - (right.y + right.height / 2),
-  );
+function clampBoundsToArea(bounds, area) {
+  const width = Math.min(bounds.width, area.width);
+  const height = Math.min(bounds.height, area.height);
+  return {
+    x: clampValue(bounds.x, area.x, area.x + area.width - width),
+    y: clampValue(bounds.y, area.y, area.y + area.height - height),
+    width,
+    height,
+  };
 }
 
 function isFiniteBounds(bounds) {
@@ -92,6 +126,6 @@ function isFiniteBounds(bounds) {
     && bounds.height > 0;
 }
 
-function clamp(value, min, max) {
+function clampValue(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }

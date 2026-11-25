@@ -8,7 +8,9 @@ import {
 } from "../avoidance-settings.mjs";
 
 // 按住多久才算真的想避让, 过滤掉 Cmd + C 这类快速组合键造成的闪烁.
-export const AVOIDANCE_HOLD_DELAY_MS = 110;
+export const AVOIDANCE_HOLD_DELAY_MS = 60;
+// 松开后等一下再恢复, 抖动轮询偶尔读到的瞬时"抬起"不会让便签来回闪.
+export const AVOIDANCE_RELEASE_DEBOUNCE_MS = 90;
 
 // 监听"按住某个修饰键"的后端:
 // - macOS: 常驻 native/mac-modifier-state 子进程轮询修饰键状态, 只读状态, 不需要辅助功能权限.
@@ -24,6 +26,7 @@ export class ModifierWatcher {
     onRelease,
     logger = { info() {}, warn() {} },
     holdDelayMs = AVOIDANCE_HOLD_DELAY_MS,
+    releaseDebounceMs = AVOIDANCE_RELEASE_DEBOUNCE_MS,
     spawnProcess = spawn,
     fileExists = existsSync,
     loadUiohook = () => import("uiohook-napi"),
@@ -36,6 +39,7 @@ export class ModifierWatcher {
     this.onRelease = onRelease;
     this.logger = logger;
     this.holdDelayMs = holdDelayMs;
+    this.releaseDebounceMs = releaseDebounceMs;
     this.spawnProcess = spawnProcess;
     this.fileExists = fileExists;
     this.loadUiohook = loadUiohook;
@@ -46,6 +50,7 @@ export class ModifierWatcher {
     this.mask = 0;
     this.pressed = false;
     this.holdTimer = null;
+    this.releaseTimer = null;
     this.fired = false;
     this.started = false;
     this.disposed = false;
@@ -91,6 +96,7 @@ export class ModifierWatcher {
   dispose() {
     this.disposed = true;
     this.cancelHold();
+    this.cancelRelease();
     this.pressed = false;
     this.fired = false;
     const reader = this.reader;
@@ -207,10 +213,21 @@ export class ModifierWatcher {
   handleMask(mask) {
     if (this.disposed) return;
     const down = (mask & this.holdBit) !== 0;
-    if (down === this.pressed) return;
-    this.pressed = down;
-    if (down) this.schedulePress();
-    else this.releaseHold();
+    if (down) {
+      this.cancelRelease();
+      if (this.pressed) return;
+      this.pressed = true;
+      if (!this.fired) this.schedulePress();
+      return;
+    }
+    if (!this.pressed) return;
+    this.pressed = false;
+    if (!this.fired) {
+      // 还没开始避让就抬起, 直接取消待触发的按下.
+      this.cancelHold();
+      return;
+    }
+    this.scheduleRelease();
   }
 
   schedulePress() {
@@ -223,8 +240,20 @@ export class ModifierWatcher {
     }, this.holdDelayMs);
   }
 
+  // 轮询偶尔会在鼠标移动时读到瞬时松开, 用去抖把这些毛刺吞掉.
+  scheduleRelease() {
+    this.cancelRelease();
+    this.releaseTimer = setTimeout(() => {
+      this.releaseTimer = null;
+      if (this.pressed || !this.fired || this.disposed) return;
+      this.fired = false;
+      this.onRelease?.();
+    }, this.releaseDebounceMs);
+  }
+
   releaseHold() {
     this.cancelHold();
+    this.cancelRelease();
     if (!this.fired) return;
     this.fired = false;
     this.onRelease?.();
@@ -234,6 +263,12 @@ export class ModifierWatcher {
     if (this.holdTimer === null) return;
     clearTimeout(this.holdTimer);
     this.holdTimer = null;
+  }
+
+  cancelRelease() {
+    if (this.releaseTimer === null) return;
+    clearTimeout(this.releaseTimer);
+    this.releaseTimer = null;
   }
 }
 

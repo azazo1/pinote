@@ -20,15 +20,6 @@ body,
   background: transparent;
 }
 
-/* 便签避让: 按住修饰键时窗口飘开并淡出, 松开后滑回原位并淡入. */
-html {
-  transition: opacity 260ms ease-out;
-}
-
-html.is-avoiding {
-  opacity: 0;
-}
-
 button,
 input,
 textarea {

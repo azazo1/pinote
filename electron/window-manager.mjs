@@ -66,6 +66,7 @@ export class WindowManager {
     });
     this.avoidance = new AvoidanceService({
       getTargets: () => this.avoidanceTargetCandidates(),
+      getCursor: () => screen.getCursorScreenPoint(),
       workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
       logger: log,
     });
@@ -82,10 +83,10 @@ export class WindowManager {
     return { platform: process.platform, wayland: this.wayland };
   }
 
-  // 按住平台修饰键时, 鼠标附近的便签依次飘开; 正在编辑(聚焦)的那一个保持不动.
+  // 按住平台修饰键时, 形成跟着鼠标走的圆形立场, 立场内的便签被推开; 正在编辑(聚焦)的那一个不参与.
   beginAvoidance() {
     if (this.quitting) return false;
-    return this.avoidance.begin(screen.getCursorScreenPoint());
+    return this.avoidance.start();
   }
 
   endAvoidance() {
@@ -124,9 +125,7 @@ export class WindowManager {
 
   hasEditingFocus(window, focused) {
     if (window === focused) return true;
-    const webContents = window.webContents;
-    if (!webContents || webContents.isDestroyed?.()) return false;
-    return Boolean(webContents.isFocused?.());
+    return typeof window.isFocused === "function" ? window.isFocused() : false;
   }
 
   isAvoidanceTracking(window) {

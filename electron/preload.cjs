@@ -70,11 +70,6 @@ contextBridge.exposeInMainWorld("noteAPI", {
     ipcRenderer.on("note:collapsed", listener);
     return () => ipcRenderer.removeListener("note:collapsed", listener);
   },
-  onAvoidance: (callback) => {
-    const listener = (_event, avoiding) => callback(Boolean(avoiding));
-    ipcRenderer.on("avoidance:state", listener);
-    return () => ipcRenderer.removeListener("avoidance:state", listener);
-  },
   onGroupState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("group:state", listener);

@@ -275,7 +275,6 @@ export interface NoteAPI {
   openUpdateReleasePage: () => Promise<boolean>;
   dismissUpdateApplyResult: () => Promise<boolean>;
   onCollapsed: (callback: (collapsed: boolean) => void) => () => void;
-  onAvoidance: (callback: (avoiding: boolean) => void) => () => void;
   onGroupState: (callback: (state: GroupState) => void) => () => void;
   onCommand: (callback: (command: AppCommand) => void) => () => void;
   onRemoteNote: (callback: (note: Note) => void) => () => void;

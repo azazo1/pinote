@@ -1,104 +1,93 @@
 import { describe, expect, it } from "vitest";
 import {
-  avoidanceExitBounds,
-  avoidanceExitDirection,
-  avoidanceExitDuration,
-  avoidanceReturnDuration,
-  boundsDistance,
-  easeInQuad,
-  easeOutCubic,
-  isAvoidanceTarget,
+  AVOIDANCE_RADIUS,
+  approachBounds,
+  avoidanceField,
+  avoidancePushTarget,
+  boundsSettled,
+  rectIntersectsCircle,
 } from "./avoidance.mjs";
 
 const area = { x: 0, y: 0, width: 1440, height: 900 };
+const note = { x: 600, y: 380, width: 253, height: 220 };
+const circle = { x: 700, y: 500, radius: 152 };
 
-describe("avoidanceExitDirection", () => {
-  it("sends a note in the middle of the screen downward", () => {
-    expect(avoidanceExitDirection({ x: 600, y: 380, width: 253, height: 220 }, area)).toBe("bottom");
+describe("avoidanceField", () => {
+  it("centers the field on the pointer with the gap included", () => {
+    expect(avoidanceField({ x: 700, y: 500 })).toEqual({ x: 700, y: 500, radius: AVOIDANCE_RADIUS + 12 });
   });
 
-  it("sends a note near the left edge leftward", () => {
-    expect(avoidanceExitDirection({ x: 10, y: 300, width: 253, height: 220 }, area)).toBe("left");
-  });
-
-  it("sends a note near the right edge rightward", () => {
-    expect(avoidanceExitDirection({ x: 1200, y: 300, width: 253, height: 220 }, area)).toBe("right");
-  });
-
-  it("sends a note near the top edge upward", () => {
-    expect(avoidanceExitDirection({ x: 600, y: 10, width: 253, height: 220 }, area)).toBe("top");
-  });
-
-  it("falls back to the original bounds when input is invalid", () => {
-    const bounds = { x: 10, y: 10, width: 100, height: 100 };
-    expect(avoidanceExitBounds(bounds, null)).toBe(bounds);
+  it("ignores an invalid pointer", () => {
+    expect(avoidanceField(null)).toBeNull();
   });
 });
 
-describe("avoidanceExitBounds", () => {
-  it("leaves the note fully outside the work area with the size unchanged", () => {
-    const bounds = { x: 600, y: 380, width: 253, height: 220 };
-    const target = avoidanceExitBounds(bounds, area);
-
-    expect(target.y).toBeGreaterThanOrEqual(area.y + area.height);
-    expect(target.width).toBe(bounds.width);
-    expect(target.height).toBe(bounds.height);
+describe("rectIntersectsCircle", () => {
+  it("detects a circle over the note", () => {
+    expect(rectIntersectsCircle(note, circle)).toBe(true);
   });
 
-  it("offsets the note sideways so the path is not a straight line", () => {
-    const bounds = { x: 10, y: 300, width: 253, height: 220 };
-    const target = avoidanceExitBounds(bounds, area);
+  it("detects a circle cutting a corner", () => {
+    expect(rectIntersectsCircle(note, { x: 590, y: 370, radius: 30 })).toBe(true);
+  });
 
-    expect(target.x + target.width).toBeLessThan(area.x);
-    expect(target.y).toBeGreaterThan(bounds.y);
+  it("ignores a circle far away", () => {
+    expect(rectIntersectsCircle(note, { x: 100, y: 100, radius: 60 })).toBe(false);
   });
 });
 
-describe("avoidance durations", () => {
-  it("grows with the distance and stays within limits", () => {
-    const near = { x: 0, y: 0, width: 100, height: 100 };
-    const far = { x: 0, y: 800, width: 100, height: 100 };
+describe("avoidancePushTarget", () => {
+  it("keeps the note at the same size and outside the field", () => {
+    const target = avoidancePushTarget(note, circle, area);
 
-    expect(avoidanceExitDuration(near, near)).toBe(340);
-    expect(avoidanceExitDuration(near, far)).toBeGreaterThan(avoidanceExitDuration(near, near));
-    expect(avoidanceExitDuration({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 5000, width: 1, height: 1 })).toBe(720);
-    expect(avoidanceReturnDuration(near, far)).toBeLessThanOrEqual(620);
-    expect(avoidanceReturnDuration(near, far)).toBeGreaterThanOrEqual(300);
+    expect(target.width).toBe(note.width);
+    expect(target.height).toBe(note.height);
+    expect(rectIntersectsCircle(target, circle)).toBe(false);
+  });
+
+  it("moves as little as possible so the note stays beside the field", () => {
+    const target = avoidancePushTarget(note, circle, area);
+    const distance = Math.hypot(target.x - note.x, target.y - note.y);
+
+    // 便签有一半落在立场里, 推开距离应接近半个便签宽/高, 而不是飞到屏幕边缘.
+    expect(distance).toBeLessThanOrEqual(300);
+  });
+
+  it("stays inside the work area", () => {
+    const target = avoidancePushTarget(note, circle, area);
+
+    expect(target.x).toBeGreaterThanOrEqual(area.x);
+    expect(target.y).toBeGreaterThanOrEqual(area.y);
+    expect(target.x + target.width).toBeLessThanOrEqual(area.x + area.width);
+    expect(target.y + target.height).toBeLessThanOrEqual(area.y + area.height);
+  });
+
+  it("returns the original bounds when the note is not in the field", () => {
+    expect(avoidancePushTarget(note, { x: 100, y: 100, radius: 50 }, area)).toBe(note);
   });
 });
 
-describe("isAvoidanceTarget", () => {
-  const bounds = { x: 600, y: 380, width: 253, height: 220 };
-
-  it("matches a pointer on the note", () => {
-    expect(isAvoidanceTarget({ x: 700, y: 500 }, bounds)).toBe(true);
+describe("approachBounds", () => {
+  it("snaps when close enough", () => {
+    expect(approachBounds({ x: 100, y: 100, width: 10, height: 10 }, { x: 101, y: 101, width: 10, height: 10 })).toEqual({
+      x: 101,
+      y: 101,
+      width: 10,
+      height: 10,
+    });
   });
 
-  it("matches a pointer slightly outside the note", () => {
-    expect(isAvoidanceTarget({ x: 590, y: 500 }, bounds)).toBe(true);
-  });
+  it("moves part of the way each frame", () => {
+    const next = approachBounds({ x: 0, y: 0, width: 10, height: 10 }, { x: 200, y: 100, width: 10, height: 10 }, 0.5);
 
-  it("ignores a pointer far away", () => {
-    expect(isAvoidanceTarget({ x: 100, y: 100 }, bounds)).toBe(false);
-  });
-});
-
-describe("easing", () => {
-  it("anchors at both ends", () => {
-    expect(easeInQuad(0)).toBe(0);
-    expect(easeInQuad(1)).toBe(1);
-    expect(easeOutCubic(0)).toBe(0);
-    expect(easeOutCubic(1)).toBe(1);
-  });
-
-  it("accelerates the exit and decelerates the return", () => {
-    expect(easeInQuad(0.5)).toBeLessThan(0.5);
-    expect(easeOutCubic(0.5)).toBeGreaterThan(0.5);
+    expect(next.x).toBe(100);
+    expect(next.y).toBe(50);
   });
 });
 
-describe("boundsDistance", () => {
-  it("measures between window centers", () => {
-    expect(boundsDistance({ x: 0, y: 0, width: 100, height: 100 }, { x: 300, y: 400, width: 100, height: 100 })).toBe(500);
+describe("boundsSettled", () => {
+  it("treats a small offset as settled", () => {
+    expect(boundsSettled({ x: 0, y: 0 }, { x: 2, y: 2 })).toBe(true);
+    expect(boundsSettled({ x: 0, y: 0 }, { x: 3, y: 0 })).toBe(false);
   });
 });

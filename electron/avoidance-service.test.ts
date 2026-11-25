@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AvoidanceService } from "./avoidance-service.mjs";
+import { avoidanceField, rectIntersectsCircle } from "./windowing/avoidance.mjs";
 
 const area = { x: 0, y: 0, width: 1440, height: 900 };
 const noteBounds = { x: 600, y: 380, width: 253, height: 220 };
-const pointer = { x: 700, y: 500 };
 
 interface FakeWindow {
   bounds: typeof noteBounds;
   ignoring: boolean;
   destroyed: boolean;
-  webContents: { send: (channel: string, value: boolean) => void; isDestroyed: () => boolean };
   isDestroyed: () => boolean;
   isVisible: () => boolean;
   getBounds: () => typeof noteBounds;
@@ -18,29 +17,26 @@ interface FakeWindow {
 }
 
 function createFakeWindow(bounds = noteBounds) {
-  const received: boolean[] = [];
   const window: FakeWindow = {
     bounds: { ...bounds },
     ignoring: false,
     destroyed: false,
-    webContents: {
-      send: (_channel, value) => { received.push(value); },
-      isDestroyed: () => false,
-    },
     isDestroyed: () => window.destroyed,
     isVisible: () => true,
     getBounds: () => ({ ...window.bounds }),
     setBounds: (next) => { window.bounds = { ...next }; },
     setIgnoreMouseEvents: (value) => { window.ignoring = value; },
   };
-  return { window, received };
+  return window;
 }
 
 let clock = 0;
+let cursor = { x: 0, y: 0 };
 
-function createService(targets: Array<{ key: string; window: FakeWindow }>) {
+function createService(targets: FakeWindow[]) {
   return new AvoidanceService({
-    getTargets: () => targets,
+    getTargets: () => targets.map((window) => ({ key: String(targets.indexOf(window)), window })),
+    getCursor: () => cursor,
     workAreaFor: () => area,
     now: () => clock,
     logger: { info() {}, warn() {} },
@@ -55,9 +51,14 @@ function advance(ms: number) {
   }
 }
 
+function insideField(bounds: typeof noteBounds) {
+  return rectIntersectsCircle(bounds, avoidanceField(cursor));
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   clock = 0;
+  cursor = { x: 0, y: 0 };
 });
 
 afterEach(() => {
@@ -65,103 +66,122 @@ afterEach(() => {
 });
 
 describe("AvoidanceService", () => {
-  it("only takes notes near the pointer", () => {
-    const near = createFakeWindow();
-    const far = createFakeWindow({ x: 100, y: 100, width: 253, height: 220 });
-    const service = createService([{ key: "near", window: near.window }, { key: "far", window: far.window }]);
+  it("pushes only the note under the field and leaves the others alone", () => {
+    const under = createFakeWindow();
+    const elsewhere = createFakeWindow({ x: 100, y: 100, width: 253, height: 220 });
+    const service = createService([under, elsewhere]);
+    cursor = { x: 700, y: 500 };
 
-    expect(service.begin(pointer)).toBe(true);
-    expect(service.isTracking(near.window)).toBe(true);
-    expect(service.isTracking(far.window)).toBe(false);
-    expect(near.window.ignoring).toBe(false);
-    expect(far.window.ignoring).toBe(false);
+    expect(service.start()).toBe(true);
+    advance(800);
+
+    expect(insideField(under.getBounds())).toBe(false);
+    expect(under.getBounds()).not.toEqual(noteBounds);
+    expect(under.ignoring).toBe(true);
+    expect(elsewhere.getBounds()).toEqual({ x: 100, y: 100, width: 253, height: 220 });
   });
 
-  it("does nothing when the pointer is far from every note", () => {
+  it("keeps pushing while the pointer chases the note", () => {
     const note = createFakeWindow();
-    const service = createService([{ key: "note", window: note.window }]);
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(800);
+    const first = note.getBounds();
+    expect(insideField(first)).toBe(false);
 
-    expect(service.begin({ x: 100, y: 50 })).toBe(false);
-    expect(service.isActive()).toBe(false);
+    // 鼠标追到便签的新位置, 便签要再让开.
+    cursor = { x: first.x + 40, y: first.y + 40 };
+    advance(800);
+
+    expect(insideField(note.getBounds())).toBe(false);
+    expect(note.getBounds()).not.toEqual(first);
   });
 
-  it("floats the note outside the work area and returns it to the exact original position", () => {
+  it("moves the note back once the pointer leaves the area", () => {
     const note = createFakeWindow();
-    const service = createService([{ key: "note", window: note.window }]);
-    const origin = note.window.getBounds();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(800);
+    expect(note.getBounds()).not.toEqual(noteBounds);
 
-    service.begin(pointer);
-    advance(2_000);
-    expect(note.window.bounds.y).toBeGreaterThanOrEqual(area.y + area.height);
-    expect(note.window.ignoring).toBe(true);
-    expect(note.received).toContain(true);
+    cursor = { x: 120, y: 820 };
+    advance(1200);
 
-    service.finish();
-    advance(4_000);
-    expect(note.window.getBounds()).toEqual(origin);
-    expect(note.window.ignoring).toBe(false);
-    expect(note.received.at(-1)).toBe(false);
-    expect(service.isActive()).toBe(false);
+    expect(note.getBounds()).toEqual(noteBounds);
+    expect(note.ignoring).toBe(false);
   });
 
-  it("keeps the original position when pressed again during the return animation", () => {
+  it("keeps the note aside while the pointer stays near its origin", () => {
     const note = createFakeWindow();
-    const service = createService([{ key: "note", window: note.window }]);
-    const origin = note.window.getBounds();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(800);
+    expect(note.getBounds()).not.toEqual(noteBounds);
 
-    service.begin(pointer);
-    advance(2_000);
-    service.finish();
-    advance(60);
+    // 鼠标退到便签原位左侧: 已离开立场圆, 但还在加宽的去抖圈内, 便签应继续让开而不是回原位.
+    cursor = { x: 435, y: 500 };
+    advance(600);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+    expect(insideField(note.getBounds())).toBe(false);
 
-    service.begin(pointer);
-    advance(2_000);
-    service.finish();
-    advance(4_000);
-
-    expect(note.window.getBounds()).toEqual(origin);
-    expect(note.window.ignoring).toBe(false);
+    // 再远一些, 完全离开去抖圈, 才回到原位.
+    cursor = { x: 380, y: 500 };
+    advance(800);
+    expect(note.getBounds()).toEqual(noteBounds);
   });
 
-  it("returns notes that were still waiting for their turn", () => {
+  it("returns every note to its exact original position when released", () => {
     const first = createFakeWindow();
-    const second = createFakeWindow({ x: 690, y: 420, width: 253, height: 220 });
-    const service = createService([{ key: "first", window: first.window }, { key: "second", window: second.window }]);
-    const firstOrigin = first.window.getBounds();
-    const secondOrigin = second.window.getBounds();
+    const second = createFakeWindow({ x: 200, y: 300, width: 253, height: 220 });
+    const service = createService([first, second]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(800);
 
-    service.begin(pointer);
     service.finish();
-    advance(4_000);
+    advance(1500);
 
-    expect(first.window.getBounds()).toEqual(firstOrigin);
-    expect(second.window.getBounds()).toEqual(secondOrigin);
-  });
-
-  it("stops tracking a window that was closed during the animation", () => {
-    const note = createFakeWindow();
-    const service = createService([{ key: "note", window: note.window }]);
-
-    service.begin(pointer);
-    advance(200);
-    note.window.destroyed = true;
-    service.forget(note.window);
-    advance(400);
-
+    expect(first.getBounds()).toEqual(noteBounds);
+    expect(second.getBounds()).toEqual({ x: 200, y: 300, width: 253, height: 220 });
+    expect(first.ignoring).toBe(false);
     expect(service.isActive()).toBe(false);
   });
 
   it("restores positions immediately when disposed", () => {
     const note = createFakeWindow();
-    const service = createService([{ key: "note", window: note.window }]);
-    const origin = note.window.getBounds();
-
-    service.begin(pointer);
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
     advance(200);
+
     service.dispose();
 
-    expect(note.window.getBounds()).toEqual(origin);
-    expect(note.window.ignoring).toBe(false);
+    expect(note.getBounds()).toEqual(noteBounds);
+    expect(note.ignoring).toBe(false);
+    expect(service.isActive()).toBe(false);
+  });
+
+  it("stops tracking a window that was closed", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(200);
+
+    note.destroyed = true;
+    service.forget(note);
+    advance(100);
+
+    expect(service.isActive()).toBe(false);
+  });
+
+  it("does nothing when there are no notes", () => {
+    const service = createService([]);
+
+    expect(service.start()).toBe(false);
     expect(service.isActive()).toBe(false);
   });
 });
