@@ -20,7 +20,6 @@ export class AvoidanceService {
     getTargets,
     getCursor,
     getFocusedWindow = () => null,
-    workAreaFor,
     logger = { info() {}, warn() {} },
     smoothTauMs = AVOIDANCE_SMOOTH_TAU_MS,
     followMs = AVOIDANCE_FOLLOW_MS,
@@ -31,7 +30,6 @@ export class AvoidanceService {
     this.getTargets = getTargets ?? (() => []);
     this.getCursor = getCursor ?? (() => null);
     this.getFocusedWindow = getFocusedWindow;
-    this.workAreaFor = workAreaFor ?? (() => ({ x: 0, y: 0, width: 0, height: 0 }));
     this.logger = logger;
     this.smoothTauMs = smoothTauMs;
     this.followMs = followMs;
@@ -170,8 +168,8 @@ export class AvoidanceService {
   }
 
   pushFrom(entry, bounds, field) {
-    const area = this.workAreaFor(bounds);
-    const candidates = avoidancePushCandidates(bounds, field, area);
+    // 候选不再受屏幕边界限制: 大窗口也能被推出屏幕边缘, 让出立场.
+    const candidates = avoidancePushCandidates(bounds, field);
     if (candidates.length === 0) return null;
     entry.target = candidates[0].target;
     return entry.target;

@@ -5,18 +5,25 @@ import { avoidanceField, rectIntersectsCircle } from "./windowing/avoidance.mjs"
 const area = { x: 0, y: 0, width: 1440, height: 900 };
 const noteBounds = { x: 600, y: 380, width: 253, height: 220 };
 
+interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface FakeWindow {
-  bounds: typeof noteBounds;
+  bounds: Bounds;
   ignoring: boolean;
   destroyed: boolean;
   isDestroyed: () => boolean;
   isVisible: () => boolean;
-  getBounds: () => typeof noteBounds;
-  setBounds: (bounds: typeof noteBounds) => void;
+  getBounds: () => Bounds;
+  setBounds: (bounds: Bounds) => void;
   setIgnoreMouseEvents: (value: boolean) => void;
 }
 
-function createFakeWindow(bounds = noteBounds) {
+function createFakeWindow(bounds: Bounds = noteBounds) {
   const window: FakeWindow = {
     bounds: { ...bounds },
     ignoring: false,
@@ -42,7 +49,6 @@ function createService(targets: FakeWindow[]) {
       .map((window) => ({ key: String(targets.indexOf(window)), window })),
     getCursor: () => cursor,
     getFocusedWindow: () => focused,
-    workAreaFor: () => area,
     now: () => clock,
     logger: { info() {}, warn() {} },
   });
@@ -56,7 +62,7 @@ function advance(ms: number) {
   }
 }
 
-function insideField(bounds: typeof noteBounds) {
+function insideField(bounds: Bounds) {
   return rectIntersectsCircle(bounds, avoidanceField(cursor));
 }
 
@@ -85,6 +91,20 @@ describe("AvoidanceService", () => {
     expect(under.getBounds()).not.toEqual(noteBounds);
     expect(under.ignoring).toBe(true);
     expect(elsewhere.getBounds()).toEqual({ x: 100, y: 100, width: 253, height: 220 });
+  });
+
+  it("pushes a large note past the screen edge instead of leaving the field covered", () => {
+    const large = { x: 640, y: 100, width: 800, height: 700 };
+    const note = createFakeWindow(large);
+    const service = createService([note]);
+    cursor = { x: 660, y: 450 };
+    service.start();
+    advance(800);
+
+    // 大窗口贴着右边且立场在它的左边缘: 推到屏幕外一部分也要露出手中的立场.
+    expect(insideField(note.getBounds())).toBe(false);
+    expect(note.getBounds().x).toBe(812);
+    expect(note.getBounds().x + note.getBounds().width).toBeGreaterThan(area.width);
   });
 
   it("keeps pushing while the pointer chases the note", () => {

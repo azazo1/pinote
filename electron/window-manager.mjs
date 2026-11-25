@@ -68,7 +68,6 @@ export class WindowManager {
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
       getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
-      workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
       logger: log,
     });
     this.wayland = isWaylandSession();

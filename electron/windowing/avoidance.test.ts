@@ -3,12 +3,11 @@ import {
   AVOIDANCE_RADIUS,
   approachBounds,
   avoidanceField,
-  avoidancePushTarget,
+  avoidancePushCandidates,
   boundsSettled,
   rectIntersectsCircle,
 } from "./avoidance.mjs";
 
-const area = { x: 0, y: 0, width: 1440, height: 900 };
 const note = { x: 600, y: 380, width: 253, height: 220 };
 const circle = { x: 700, y: 500, radius: 152 };
 
@@ -36,34 +35,30 @@ describe("rectIntersectsCircle", () => {
   });
 });
 
-describe("avoidancePushTarget", () => {
-  it("keeps the note at the same size and outside the field", () => {
-    const target = avoidancePushTarget(note, circle, area);
+describe("avoidancePushCandidates", () => {
+  it("sorts candidates by distance and keeps the note size", () => {
+    const candidates = avoidancePushCandidates(note, circle);
 
-    expect(target.width).toBe(note.width);
-    expect(target.height).toBe(note.height);
-    expect(rectIntersectsCircle(target, circle)).toBe(false);
+    expect(candidates[0].direction).toBe("right");
+    expect(candidates[0].target).toMatchObject({ width: note.width, height: note.height });
+    for (let index = 1; index < candidates.length; index += 1) {
+      expect(candidates[index].distance).toBeGreaterThanOrEqual(candidates[index - 1].distance);
+    }
   });
 
-  it("moves as little as possible so the note stays beside the field", () => {
-    const target = avoidancePushTarget(note, circle, area);
-    const distance = Math.hypot(target.x - note.x, target.y - note.y);
+  it("lets a large note pass the screen edge to clear the field", () => {
+    const large = { x: 640, y: 100, width: 800, height: 700 };
+    const candidates = avoidancePushCandidates(large, { x: 660, y: 450, radius: 152 });
 
-    // 便签有一半落在立场里, 推开距离应接近半个便签宽/高, 而不是飞到屏幕边缘.
-    expect(distance).toBeLessThanOrEqual(300);
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates[0].direction).toBe("right");
+    expect(candidates[0].target.x).toBe(812);
+    // 允许移出屏幕: 不再被工作区边界夹回立场内.
+    expect(candidates[0].target.x + large.width).toBeGreaterThan(1440);
   });
 
-  it("stays inside the work area", () => {
-    const target = avoidancePushTarget(note, circle, area);
-
-    expect(target.x).toBeGreaterThanOrEqual(area.x);
-    expect(target.y).toBeGreaterThanOrEqual(area.y);
-    expect(target.x + target.width).toBeLessThanOrEqual(area.x + area.width);
-    expect(target.y + target.height).toBeLessThanOrEqual(area.y + area.height);
-  });
-
-  it("returns the original bounds when the note is not in the field", () => {
-    expect(avoidancePushTarget(note, { x: 100, y: 100, radius: 50 }, area)).toBe(note);
+  it("returns nothing for invalid input", () => {
+    expect(avoidancePushCandidates(null, circle)).toEqual([]);
   });
 });
 
