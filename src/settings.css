@@ -304,31 +304,20 @@
   font-size: 10px;
 }
 
-.shortcut-suboption {
-  display: inline-flex;
+.shortcut-toggle {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 2px;
-  color: #7b7f76;
+  gap: 6px;
+  color: #696c64;
   font-size: 10px;
   cursor: pointer;
 }
 
-.shortcut-suboption input {
-  width: 12px;
-  height: 12px;
+.shortcut-toggle input {
+  width: 13px;
+  height: 13px;
   margin: 0;
   accent-color: #647759;
-}
-
-/* 子选项文字不受 .shortcut-name span 的红色错误样式影响. */
-.shortcut-name .shortcut-suboption span {
-  overflow: visible;
-  color: #7b7f76;
-  font-size: 10px;
-  line-height: 1.3;
-  text-overflow: clip;
-  white-space: normal;
 }
 
 .shortcut-select:disabled {
