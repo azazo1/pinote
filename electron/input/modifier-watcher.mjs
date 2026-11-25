@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import readline from "node:readline";
 import {
-  AVOIDANCE_MODIFIER_SIDES,
+  AVOIDANCE_MODIFIER_BITS,
   avoidanceModifierLabel,
   normalizeAvoidanceModifier,
 } from "../avoidance-settings.mjs";
@@ -11,16 +11,18 @@ import {
 export const AVOIDANCE_HOLD_DELAY_MS = 60;
 // 松开后等一下再恢复, 抖动轮询偶尔读到的瞬时"抬起"不会让便签来回闪.
 export const AVOIDANCE_RELEASE_DEBOUNCE_MS = 90;
-// 左右同按进入"保持避让"后, 这么久没有再次同按切换回来就自动取消.
+// 两次按下之间的最小/最大间隔: 太短视为轮询抖动, 太长不算双击.
+export const AVOIDANCE_MIN_TAP_GAP_MS = 100;
+export const AVOIDANCE_DOUBLE_TAP_MS = 300;
+// 双击进入"保持避让"后, 这么久没有再次双击就自动取消.
 export const AVOIDANCE_LATCH_TIMEOUT_MS = 30_000;
 
-// 监听"按住某个修饰键"的后端:
+// 监听"按住/双击某个修饰键"的后端:
 // - macOS: 常驻 native/mac-modifier-state 子进程轮询修饰键状态, 只读状态, 不需要辅助功能权限.
 // - Windows / Linux: 用 uiohook 的全局键盘钩子, 系统不需要额外授权.
-// 两种后端都只上报左右分开的位掩码, 不拦截按键, 也不改变焦点.
+// 两种后端都只上报修饰键位掩码, 不拦截按键, 也不改变焦点.
 //
-// 交互: 按住单侧 = 临时避让, 松开恢复; 左右两侧同时按下 = 切换"保持避让",
-// 再同按一次恢复, 否则 30 秒后自动取消.
+// 交互: 按住 = 临时避让, 松开恢复; 双击 = 切换"保持避让", 再双击解除, 否则 30 秒后自动取消.
 export class ModifierWatcher {
   constructor({
     platform = process.platform,
@@ -32,10 +34,13 @@ export class ModifierWatcher {
     logger = { info() {}, warn() {} },
     holdDelayMs = AVOIDANCE_HOLD_DELAY_MS,
     releaseDebounceMs = AVOIDANCE_RELEASE_DEBOUNCE_MS,
+    minTapGapMs = AVOIDANCE_MIN_TAP_GAP_MS,
+    doubleTapMs = AVOIDANCE_DOUBLE_TAP_MS,
     latchTimeoutMs = AVOIDANCE_LATCH_TIMEOUT_MS,
     spawnProcess = spawn,
     fileExists = existsSync,
     loadUiohook = () => import("uiohook-napi"),
+    now = () => Date.now(),
   } = {}) {
     this.platform = platform;
     this.wayland = wayland;
@@ -46,10 +51,13 @@ export class ModifierWatcher {
     this.logger = logger;
     this.holdDelayMs = holdDelayMs;
     this.releaseDebounceMs = releaseDebounceMs;
+    this.minTapGapMs = minTapGapMs;
+    this.doubleTapMs = doubleTapMs;
     this.latchTimeoutMs = latchTimeoutMs;
     this.spawnProcess = spawnProcess;
     this.fileExists = fileExists;
     this.loadUiohook = loadUiohook;
+    this.now = now;
     this.child = null;
     this.reader = null;
     this.uiohook = null;
@@ -59,9 +67,9 @@ export class ModifierWatcher {
     this.holdTimer = null;
     this.releaseTimer = null;
     this.latchTimer = null;
+    this.lastPressAt = null;
     this.fired = false;
     this.latched = false;
-    this.bothHandled = false;
     this.suppress = false;
     this.started = false;
     this.disposed = false;
@@ -70,6 +78,10 @@ export class ModifierWatcher {
 
   get modifierLabel() {
     return avoidanceModifierLabel(this.modifier, this.platform);
+  }
+
+  get holdBit() {
+    return AVOIDANCE_MODIFIER_BITS[this.modifier] ?? 0;
   }
 
   async start() {
@@ -94,13 +106,8 @@ export class ModifierWatcher {
     const next = normalizeAvoidanceModifier(modifier, this.platform);
     if (next === this.modifier) return;
     this.modifier = next;
-    // 换键时清掉旧按键的按下和保持状态, 避免残留一次"按住"或"保持"状态.
-    this.pressed = false;
-    this.latched = false;
-    this.suppress = false;
-    this.bothHandled = false;
-    this.clearLatchTimer();
-    this.releaseHold();
+    // 换键时清掉旧按键的按下与保持状态, 避免残留一次"按住"或"保持".
+    this.resetPressState();
     this.logger.info("便签避让按键已切换", { modifier: this.modifierLabel });
   }
 
@@ -110,6 +117,7 @@ export class ModifierWatcher {
     this.cancelRelease();
     this.clearLatchTimer();
     this.pressed = false;
+    this.lastPressAt = null;
     this.fired = false;
     this.latched = false;
     const reader = this.reader;
@@ -180,6 +188,7 @@ export class ModifierWatcher {
         if (this.disposed) return;
         this.started = false;
         this.latched = false;
+        this.lastPressAt = null;
         this.clearLatchTimer();
         this.releaseHold();
         this.logger.warn("便签避让 helper 已退出", { code, signal });
@@ -227,35 +236,31 @@ export class ModifierWatcher {
 
   handleMask(mask) {
     if (this.disposed) return;
-    const sides = AVOIDANCE_MODIFIER_SIDES[this.modifier];
-    if (!sides) return;
-    const left = (mask & sides.left) !== 0;
-    const right = (mask & sides.right) !== 0;
-    const both = left && right;
-    const down = left || right;
-
-    if (both) {
-      this.cancelRelease();
-      this.pressed = true;
-      // 左右同时按下: 只处理一次, 进入或解除"保持避让".
-      if (!this.bothHandled) {
-        this.bothHandled = true;
-        this.toggleLatched();
-      }
-      return;
-    }
-    this.bothHandled = false;
+    const down = (mask & this.holdBit) !== 0;
 
     if (down) {
       this.cancelRelease();
       if (this.pressed) return;
       this.pressed = true;
-      if (this.suppress || this.latched || this.fired) return;
-      this.schedulePress();
+      // 刚解除保持时按键还按着, 等全部松开前不再参与.
+      if (this.suppress) {
+        this.lastPressAt = null;
+        return;
+      }
+      const now = this.now();
+      const gap = this.lastPressAt === null ? null : now - this.lastPressAt;
+      if (gap !== null && gap >= this.minTapGapMs && gap <= this.doubleTapMs) {
+        // 窗口内第二次按下: 切换保持.
+        this.lastPressAt = null;
+        this.toggleLatched();
+        return;
+      }
+      this.lastPressAt = now;
+      if (!this.latched && !this.fired) this.schedulePress();
       return;
     }
 
-    // 两侧都松开.
+    if (!this.pressed) return;
     this.pressed = false;
     this.suppress = false;
     if (this.latched) {
@@ -271,11 +276,12 @@ export class ModifierWatcher {
 
   toggleLatched() {
     if (this.latched) {
-      // 再同按一次: 取消保持. 按键还按着, 等全部松开前不再触发普通按住.
+      // 保持中再次双击: 解除. 按键还按着, 等全部松开前不再触发普通按住.
       this.latched = false;
-      this.suppress = true;
+      this.suppress = this.pressed;
       this.clearLatchTimer();
       this.releaseHold();
+      this.logger.info("便签避让保持已解除");
       return;
     }
     this.latched = true;
@@ -286,6 +292,7 @@ export class ModifierWatcher {
       this.fired = true;
       this.onPress?.();
     }
+    this.logger.info("便签避让切换为保持", { timeoutMs: this.latchTimeoutMs });
   }
 
   armLatchTimer() {
@@ -293,7 +300,7 @@ export class ModifierWatcher {
     this.latchTimer = setTimeout(() => {
       this.latchTimer = null;
       if (!this.latched || this.disposed) return;
-      // 30 秒内没有切换回来, 自动取消保持.
+      // 30 秒内没有再次双击, 自动取消保持.
       this.latched = false;
       this.suppress = this.pressed;
       this.releaseHold();
@@ -305,6 +312,15 @@ export class ModifierWatcher {
     if (this.latchTimer === null) return;
     clearTimeout(this.latchTimer);
     this.latchTimer = null;
+  }
+
+  resetPressState() {
+    this.pressed = false;
+    this.lastPressAt = null;
+    this.latched = false;
+    this.suppress = false;
+    this.clearLatchTimer();
+    this.releaseHold();
   }
 
   schedulePress() {
@@ -353,13 +369,13 @@ function buildKeycodeMap(keys) {
   const map = new Map();
   const pairs = [
     [keys.Shift, 8],
-    [keys.ShiftRight, 128],
+    [keys.ShiftRight, 8],
     [keys.Ctrl, 4],
-    [keys.CtrlRight, 64],
+    [keys.CtrlRight, 4],
     [keys.Alt, 2],
-    [keys.AltRight, 32],
+    [keys.AltRight, 2],
     [keys.Meta, 1],
-    [keys.MetaRight, 16],
+    [keys.MetaRight, 1],
   ];
   for (const [code, bit] of pairs) {
     if (Number.isFinite(code)) map.set(code, bit);

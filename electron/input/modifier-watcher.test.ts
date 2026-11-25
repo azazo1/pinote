@@ -6,6 +6,8 @@ import {
   ModifierWatcher,
 } from "./modifier-watcher.mjs";
 
+let clock = 0;
+
 function createWatcher(overrides = {}) {
   const onPress = vi.fn();
   const onRelease = vi.fn();
@@ -18,6 +20,7 @@ function createWatcher(overrides = {}) {
     onPress,
     onRelease,
     logger: { info: vi.fn(), warn: vi.fn() },
+    now: () => clock,
     ...overrides,
   });
   return { watcher, onPress, onRelease };
@@ -25,6 +28,7 @@ function createWatcher(overrides = {}) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  clock = 0;
 });
 
 afterEach(() => {
@@ -82,33 +86,55 @@ describe("ModifierWatcher", () => {
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  it("latches avoidance when both sides are pressed and toggles it off on the next press", () => {
+  it("latches avoidance on a double tap and clears it on the next double tap", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 
+    // 第一次按下并松开: 普通临时避让.
     watcher.handleMask(1);
     vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
     expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS);
+    expect(onRelease).toHaveBeenCalledTimes(1);
 
-    watcher.handleMask(17);
-    watcher.handleMask(16);
-    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 3);
-    expect(onRelease).not.toHaveBeenCalled();
-
-    // 全部松开后依然保持.
+    // 双击: 第二次按下落在窗口内, 切换成保持.
+    clock += 150;
+    watcher.handleMask(1);
+    expect(onPress).toHaveBeenCalledTimes(2);
     watcher.handleMask(0);
     vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 3);
-    expect(onRelease).not.toHaveBeenCalled();
-
-    // 再次左右同按取消保持.
-    watcher.handleMask(17);
     expect(onRelease).toHaveBeenCalledTimes(1);
+
+    // 再次双击解除保持.
+    clock += 400;
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
+    expect(onRelease).toHaveBeenCalledTimes(2);
+    watcher.handleMask(0);
+  });
+
+  it("does not latch when the second press is too late", () => {
+    const { watcher, onPress } = createWatcher();
+
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 500;
+    watcher.handleMask(1);
+    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
+
+    expect(onPress).toHaveBeenCalledTimes(1);
     watcher.handleMask(0);
   });
 
   it("cancels a latch automatically after the timeout", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 
-    watcher.handleMask(17);
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
     expect(onPress).toHaveBeenCalledTimes(1);
     watcher.handleMask(0);
 
@@ -118,16 +144,26 @@ describe("ModifierWatcher", () => {
     expect(onRelease).toHaveBeenCalledTimes(1);
   });
 
-  it("does not re-trigger after cancelling while a key is still held", () => {
+  it("does not re-trigger after clearing the latch while the key is still held", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 
-    watcher.handleMask(17);
-    watcher.handleMask(16);
-    watcher.handleMask(17);
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 3);
+    expect(onRelease).not.toHaveBeenCalled();
+
+    // 双击解除, 解除瞬间按键仍然按着.
+    clock += 400;
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
     expect(onRelease).toHaveBeenCalledTimes(1);
 
-    // 取消后仍按着右侧, 不应重新开始避让.
-    watcher.handleMask(16);
     vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS * 2);
     expect(onPress).toHaveBeenCalledTimes(1);
     watcher.handleMask(0);
