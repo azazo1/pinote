@@ -50,6 +50,7 @@
     "appId": "dev.pinote.desktop",
     "productName": "Pinote",
     "asar": true,
+    "npmRebuild": false,
     "asarUnpack": [
       "node_modules/uiohook-napi/**"
     ],
