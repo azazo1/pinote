@@ -29,9 +29,11 @@ export function rectIntersectsCircle(bounds, circle) {
   return deltaX * deltaX + deltaY * deltaY < circle.radius * circle.radius;
 }
 
-// 把便签推到立场外的候选位置: 只要求与立场圆不相交, 允许移出屏幕.
-// 屏幕边缘不再限制推开的距离, 大窗口也能让出立场.
-export function avoidancePushCandidates(bounds, circle) {
+// 把便签推到立场外的候选位置, 按"能真正移动的方向优先, 其次位移更小"排序.
+// display 是显示器信息 ({ bounds, workArea }): 工作区比显示器小的一侧通常被菜单栏,
+// 任务栏或 Dock 占用, 朝那一侧越界会被系统顶住, 这些候选降到后面; 没有缺口的侧
+// (例如屏幕左右) 即使越界也允许, 大窗口和贴边的小条照样能让出立场.
+export function avoidancePushCandidates(bounds, circle, display = null) {
   if (!isFiniteBounds(bounds) || !circle) return [];
   const radius = circle.radius;
   const raw = [
@@ -40,14 +42,38 @@ export function avoidancePushCandidates(bounds, circle) {
     { direction: "up", x: bounds.x, y: (circle.y - radius) - bounds.height },
     { direction: "down", x: bounds.x, y: circle.y + radius },
   ];
+  const area = display?.workArea ?? null;
+  const screen = display?.bounds ?? null;
   return raw
-    .map(({ direction, x, y }) => ({
-      direction,
-      target: { x, y, width: bounds.width, height: bounds.height },
-      distance: Math.hypot(x - bounds.x, y - bounds.y),
-    }))
+    .map(({ direction, x, y }) => {
+      const target = { x, y, width: bounds.width, height: bounds.height };
+      return {
+        direction,
+        target,
+        distance: Math.hypot(x - bounds.x, y - bounds.y),
+        blocked: isBlockedBySystemEdge(target, area, screen),
+      };
+    })
     .filter((candidate) => !rectIntersectsCircle(candidate.target, circle))
-    .sort((left, right) => left.distance - right.distance);
+    .sort((left, right) => {
+      if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
+      return left.distance - right.distance;
+    });
+}
+
+// 目标跨过了"系统 UI 占用的那一侧"才算被挡住: 只有工作区比显示器小的侧 (菜单栏,
+// 任务栏, Dock) 会拦住窗口, 没有缺口的侧允许窗口部分出屏.
+function isBlockedBySystemEdge(target, area, screen) {
+  if (!area || !screen || !isFiniteBounds(target)) return false;
+  const screenRight = screen.x + screen.width;
+  const screenBottom = screen.y + screen.height;
+  const areaRight = area.x + area.width;
+  const areaBottom = area.y + area.height;
+  if (area.y > screen.y && target.y < area.y) return true;
+  if (areaBottom < screenBottom && target.y + target.height > areaBottom) return true;
+  if (area.x > screen.x && target.x < area.x) return true;
+  if (areaRight < screenRight && target.x + target.width > areaRight) return true;
+  return false;
 }
 
 // 逐帧靠近目标位置, 到位后直接吸附, 避免永远差一像素.

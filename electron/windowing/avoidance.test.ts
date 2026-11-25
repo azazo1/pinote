@@ -46,6 +46,30 @@ describe("avoidancePushCandidates", () => {
     }
   });
 
+  it("demotes the move that would cross a menu bar or taskbar gap", () => {
+    const pill = { x: 100, y: 55, width: 253, height: 22 };
+    const field = { x: 230, y: 145, radius: 152 };
+    const topGap = {
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      workArea: { x: 0, y: 25, width: 1440, height: 875 },
+    };
+
+    // 没有显示器信息时, 向上位移最小.
+    expect(avoidancePushCandidates(pill, field)[0].direction).toBe("up");
+    // 顶部缺口 (菜单栏) 会挡住向上, 应改走下方.
+    expect(avoidancePushCandidates(pill, field, topGap)[0].direction).toBe("down");
+
+    // 底部任务栏同理: 在下方让位时会越过任务栏, 应改走上方.
+    const bottomPill = { x: 100, y: 800, width: 253, height: 22 };
+    const bottomField = { x: 200, y: 760, radius: 152 };
+    const bottomGap = {
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      workArea: { x: 0, y: 0, width: 1440, height: 860 },
+    };
+    expect(avoidancePushCandidates(bottomPill, bottomField)[0].direction).toBe("down");
+    expect(avoidancePushCandidates(bottomPill, bottomField, bottomGap)[0].direction).toBe("up");
+  });
+
   it("lets a large note pass the screen edge to clear the field", () => {
     const large = { x: 640, y: 100, width: 800, height: 700 };
     const candidates = avoidancePushCandidates(large, { x: 660, y: 450, radius: 152 });

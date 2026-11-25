@@ -20,6 +20,7 @@ export class AvoidanceService {
     getTargets,
     getCursor,
     getFocusedWindow = () => null,
+    displayFor,
     logger = { info() {}, warn() {} },
     smoothTauMs = AVOIDANCE_SMOOTH_TAU_MS,
     followMs = AVOIDANCE_FOLLOW_MS,
@@ -30,6 +31,7 @@ export class AvoidanceService {
     this.getTargets = getTargets ?? (() => []);
     this.getCursor = getCursor ?? (() => null);
     this.getFocusedWindow = getFocusedWindow;
+    this.displayFor = displayFor ?? (() => null);
     this.logger = logger;
     this.smoothTauMs = smoothTauMs;
     this.followMs = followMs;
@@ -168,8 +170,8 @@ export class AvoidanceService {
   }
 
   pushFrom(entry, bounds, field) {
-    // 候选不再受屏幕边界限制: 大窗口也能被推出屏幕边缘, 让出立场.
-    const candidates = avoidancePushCandidates(bounds, field);
+    // 系统 UI (菜单栏/任务栏/Dock) 占用的那一侧会被顶住, 排序里已降到后面.
+    const candidates = avoidancePushCandidates(bounds, field, this.displayFor(bounds));
     if (candidates.length === 0) return null;
     entry.target = candidates[0].target;
     return entry.target;

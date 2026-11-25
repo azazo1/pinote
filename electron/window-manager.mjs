@@ -68,6 +68,10 @@ export class WindowManager {
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
       getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
+      displayFor: (bounds) => {
+        const display = screen.getDisplayMatching(bounds);
+        return { bounds: display.bounds, workArea: display.workArea };
+      },
       logger: log,
     });
     this.wayland = isWaylandSession();

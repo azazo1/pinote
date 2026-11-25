@@ -4,6 +4,7 @@ import { avoidanceField, rectIntersectsCircle } from "./windowing/avoidance.mjs"
 
 const area = { x: 0, y: 0, width: 1440, height: 900 };
 const noteBounds = { x: 600, y: 380, width: 253, height: 220 };
+let display = { bounds: area, workArea: area };
 
 interface Bounds {
   x: number;
@@ -41,7 +42,8 @@ let clock = 0;
 let cursor = { x: 0, y: 0 };
 let focused: FakeWindow | null = null;
 
-function createService(targets: FakeWindow[]) {
+function createService(targets: FakeWindow[], customDisplay = null) {
+  const targetDisplay = customDisplay ?? display;
   return new AvoidanceService({
     // 与窗口管理器一致: 聚焦的窗口不参与避让.
     getTargets: () => targets
@@ -49,6 +51,7 @@ function createService(targets: FakeWindow[]) {
       .map((window) => ({ key: String(targets.indexOf(window)), window })),
     getCursor: () => cursor,
     getFocusedWindow: () => focused,
+    displayFor: () => targetDisplay,
     now: () => clock,
     logger: { info() {}, warn() {} },
   });
@@ -71,6 +74,7 @@ beforeEach(() => {
   clock = 0;
   cursor = { x: 0, y: 0 };
   focused = null;
+  display = { bounds: area, workArea: area };
 });
 
 afterEach(() => {
@@ -91,6 +95,22 @@ describe("AvoidanceService", () => {
     expect(under.getBounds()).not.toEqual(noteBounds);
     expect(under.ignoring).toBe(true);
     expect(elsewhere.getBounds()).toEqual({ x: 100, y: 100, width: 253, height: 220 });
+  });
+
+  it("moves a note at the top downward instead of pushing it into the menu bar", () => {
+    // 截图场景: 收起的小条贴着菜单栏, 鼠标在它下方: 向上会被菜单栏顶住, 应向下让开.
+    const pill = createFakeWindow({ x: 100, y: 55, width: 253, height: 22 });
+    const service = createService([pill], {
+      bounds: area,
+      workArea: { x: 0, y: 25, width: 1440, height: 875 },
+    });
+    cursor = { x: 230, y: 145 };
+    service.start();
+    advance(800);
+
+    expect(insideField(pill.getBounds())).toBe(false);
+    expect(pill.getBounds().y).toBe(297);
+    expect(pill.getBounds().x).toBe(100);
   });
 
   it("pushes a large note past the screen edge instead of leaving the field covered", () => {
