@@ -718,6 +718,20 @@ describe("NoteStore", () => {
     expect(restored.getPreferences().hideDockOnMainClose).toBe(true);
   });
 
+  it("persists the avoidance latch timeout preference", async () => {
+    const dataPath = testStorePath();
+    const store = new NoteStore(dataPath);
+    await store.load();
+    expect(store.getPreferences().avoidanceLatchTimeout).toBe(true);
+
+    store.updatePreferences({ avoidanceLatchTimeout: false });
+    await store.save();
+
+    const restored = new NoteStore(dataPath);
+    await restored.load();
+    expect(restored.getPreferences().avoidanceLatchTimeout).toBe(false);
+  });
+
   it("persists update settings and start-hidden preference", async () => {
     const dataPath = testStorePath();
     const store = new NoteStore(dataPath);

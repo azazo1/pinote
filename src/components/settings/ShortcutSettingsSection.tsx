@@ -77,6 +77,18 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
     }
   }
 
+  async function updateAvoidanceLatch(enabled: boolean) {
+    setBusy("avoidance");
+    setAvoidanceError("");
+    try {
+      onSettings(await window.noteAPI.updateAvoidanceLatchTimeout(enabled));
+    } catch (reason) {
+      setAvoidanceError(errorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function capture(event: KeyboardEvent<HTMLButtonElement>, id: ShortcutCommandId) {
     event.preventDefault();
     event.stopPropagation();
@@ -192,6 +204,25 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
             </select>
+          </div>
+          <div className="shortcut-row shortcut-row-single">
+            <div className="shortcut-name">
+              <strong>30 秒后自动取消</strong>
+              <span className="shortcut-hint">
+                {avoidance.latchTimeout
+                  ? "双击进入保持后, 30 秒内没有再次双击就自动恢复"
+                  : "保持不会自动恢复, 需要再次双击才解除"}
+              </span>
+            </div>
+            <label className="shortcut-toggle">
+              <input
+                type="checkbox"
+                checked={avoidance.latchTimeout}
+                disabled={busy !== null}
+                onChange={(event) => void updateAvoidanceLatch(event.target.checked)}
+              />
+              <span>{avoidance.latchTimeout ? "开启" : "关闭"}</span>
+            </label>
           </div>
         </div>
       </section>

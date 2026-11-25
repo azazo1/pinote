@@ -144,6 +144,35 @@ describe("ModifierWatcher", () => {
     expect(onRelease).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the latch forever when the timeout is turned off", () => {
+    const { watcher, onPress, onRelease } = createWatcher({ latchTimeoutEnabled: false });
+
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+
+    vi.advanceTimersByTime(AVOIDANCE_LATCH_TIMEOUT_MS * 2);
+    expect(onRelease).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending timeout when the option is turned off", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    watcher.handleMask(0);
+
+    watcher.setLatchTimeout(false);
+    vi.advanceTimersByTime(AVOIDANCE_LATCH_TIMEOUT_MS * 2);
+    expect(onRelease).not.toHaveBeenCalled();
+  });
+
   it("does not re-trigger after clearing the latch while the key is still held", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 

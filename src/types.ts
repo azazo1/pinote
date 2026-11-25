@@ -108,6 +108,7 @@ export interface AvoidanceModifierOption {
 export interface AvoidanceSettings {
   modifier: AvoidanceModifier;
   options: AvoidanceModifierOption[];
+  latchTimeout: boolean;
 }
 
 export interface GeneralSettings {
@@ -262,6 +263,7 @@ export interface NoteAPI {
     patch: { accelerator?: string | null; global?: boolean },
   ) => Promise<AppSettings>;
   updateAvoidanceModifier: (modifier: AvoidanceModifier) => Promise<AppSettings>;
+  updateAvoidanceLatchTimeout: (enabled: boolean) => Promise<AppSettings>;
   resetShortcut: (id: ShortcutCommandId) => Promise<AppSettings>;
   resetShortcuts: () => Promise<AppSettings>;
   getAppInfo: () => Promise<AppInfo>;

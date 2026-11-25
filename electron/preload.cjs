@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld("noteAPI", {
   updateGeneralSettings: (patch) => ipcRenderer.invoke("settings:update-general", patch),
   updateShortcut: (id, patch) => ipcRenderer.invoke("settings:update-shortcut", id, patch),
   updateAvoidanceModifier: (modifier) => ipcRenderer.invoke("settings:update-avoidance", modifier),
+  updateAvoidanceLatchTimeout: (enabled) => ipcRenderer.invoke("settings:update-avoidance-latch", enabled),
   resetShortcut: (id) => ipcRenderer.invoke("settings:reset-shortcut", id),
   resetShortcuts: () => ipcRenderer.invoke("settings:reset-shortcuts"),
   getAppInfo: () => ipcRenderer.invoke("app:get-info"),

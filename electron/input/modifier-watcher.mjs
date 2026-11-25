@@ -37,6 +37,7 @@ export class ModifierWatcher {
     minTapGapMs = AVOIDANCE_MIN_TAP_GAP_MS,
     doubleTapMs = AVOIDANCE_DOUBLE_TAP_MS,
     latchTimeoutMs = AVOIDANCE_LATCH_TIMEOUT_MS,
+    latchTimeoutEnabled = true,
     spawnProcess = spawn,
     fileExists = existsSync,
     loadUiohook = () => import("uiohook-napi"),
@@ -54,6 +55,7 @@ export class ModifierWatcher {
     this.minTapGapMs = minTapGapMs;
     this.doubleTapMs = doubleTapMs;
     this.latchTimeoutMs = latchTimeoutMs;
+    this.latchTimeoutEnabled = latchTimeoutEnabled;
     this.spawnProcess = spawnProcess;
     this.fileExists = fileExists;
     this.loadUiohook = loadUiohook;
@@ -100,6 +102,18 @@ export class ModifierWatcher {
       });
     }
     return started;
+  }
+
+  // 开关"30 秒自动取消": 关闭时保持状态一直有效, 直到再次双击.
+  setLatchTimeout(enabled) {
+    const next = Boolean(enabled);
+    if (next === this.latchTimeoutEnabled) return;
+    this.latchTimeoutEnabled = next;
+    if (!next) {
+      this.clearLatchTimer();
+      return;
+    }
+    if (this.latched) this.armLatchTimer();
   }
 
   setModifier(modifier) {
@@ -297,6 +311,7 @@ export class ModifierWatcher {
 
   armLatchTimer() {
     this.clearLatchTimer();
+    if (!this.latchTimeoutEnabled) return;
     this.latchTimer = setTimeout(() => {
       this.latchTimer = null;
       if (!this.latched || this.disposed) return;

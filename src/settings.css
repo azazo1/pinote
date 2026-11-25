@@ -304,6 +304,22 @@
   font-size: 10px;
 }
 
+.shortcut-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #696c64;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.shortcut-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #647759;
+}
+
 .shortcut-select:disabled {
   cursor: default;
   opacity: 0.38;

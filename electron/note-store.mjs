@@ -494,6 +494,8 @@ function normalizePreferences(value, platform) {
     defaultNoteColor: NOTE_COLORS.has(value?.defaultNoteColor) ? value.defaultNoteColor : DEFAULT_COLOR,
     defaultNotePinned: Boolean(value?.defaultNotePinned),
     avoidanceModifier: normalizeAvoidanceModifier(value?.avoidanceModifier, platform),
+    // 双击进入"保持避让"后, 30 秒内没有再次双击是否自动取消; 关闭后一直保持到再次双击.
+    avoidanceLatchTimeout: value?.avoidanceLatchTimeout !== false,
     update: {
       autoCheck: value?.update?.autoCheck !== false,
       skippedVersion: typeof value?.update?.skippedVersion === "string"

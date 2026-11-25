@@ -138,6 +138,7 @@ function startApplication() {
       platform: process.platform,
       wayland: windows.getCapabilities().wayland,
       modifier: store.getPreferences().avoidanceModifier,
+      latchTimeoutEnabled: store.getPreferences().avoidanceLatchTimeout,
       helperPath: resolveAvoidanceHelperPath(),
       logger: log,
       onPress: () => windows.beginAvoidance(),
@@ -334,6 +335,14 @@ function registerIpc() {
     store.updatePreferences({ avoidanceModifier: normalized });
     modifierWatcher?.setModifier(normalized);
     log.info("便签避让按键已更新", { modifier: normalized });
+    broadcastSettings();
+    return getAppSettings();
+  });
+  ipcMain.handle("settings:update-avoidance-latch", (_event, enabled) => {
+    const next = Boolean(enabled);
+    store.updatePreferences({ avoidanceLatchTimeout: next });
+    modifierWatcher?.setLatchTimeout(next);
+    log.info("便签避让自动取消已更新", { enabled: next });
     broadcastSettings();
     return getAppSettings();
   });
@@ -549,6 +558,7 @@ function getAppSettings() {
     avoidance: {
       modifier: preferences.avoidanceModifier,
       options: avoidanceModifierOptions(process.platform),
+      latchTimeout: preferences.avoidanceLatchTimeout,
     },
   };
 }
