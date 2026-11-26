@@ -195,6 +195,23 @@ describe("AvoidanceService", () => {
     expect(note.ignoring).toBe(false);
   });
 
+  it("stops pushing while suspended and resumes afterwards", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(600);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+
+    service.suspend();
+    advance(600);
+    expect(note.getBounds()).toEqual(noteBounds);
+
+    service.resume();
+    advance(600);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+  });
+
   it("can include a released window again in the current hold", () => {
     const note = createFakeWindow();
     const service = createService([note]);

@@ -39,6 +39,7 @@ export class AvoidanceService {
     this.clearIntervalFn = clearIntervalFn;
     this.now = now;
     this.phase = "idle";
+    this.suspended = false;
     this.entries = new Map();
     this.excluded = new Set();
     this.loopTimer = null;
@@ -62,6 +63,7 @@ export class AvoidanceService {
   start() {
     if (this.phase === "field") return false;
     this.phase = "field";
+    this.suspended = false;
     this.excluded.clear();
     this.trackTargets();
     // 即使当前没有可参与的窗口也保持立场: 编辑中的便签收起后, 或尺寸动画结束后,
@@ -76,6 +78,7 @@ export class AvoidanceService {
   finish() {
     if (this.phase !== "field") return false;
     this.phase = "returning";
+    this.suspended = false;
     this.settleDeadline = this.now() + SETTLE_TIMEOUT_MS;
     this.logger.info("便签正在回到原位", { count: this.entries.size });
     return true;
@@ -87,6 +90,19 @@ export class AvoidanceService {
       this.entries.delete(key);
     }
     if (this.entries.size === 0 && this.phase !== "idle") this.exit();
+  }
+
+  // 保持模式下按住修饰键: 临时取消避让, 便签回到原位; 松开后恢复.
+  suspend() {
+    if (this.phase !== "field" || this.suspended) return false;
+    this.suspended = true;
+    return true;
+  }
+
+  resume() {
+    if (!this.suspended) return false;
+    this.suspended = false;
+    return true;
   }
 
   // 退出或被禁用时立刻还原, 不做动画.
@@ -123,7 +139,8 @@ export class AvoidanceService {
         continue;
       }
       const current = window.getBounds();
-      const target = this.targetFor(entry, current, field);
+      // 临时取消避让时不推, 直接回原位.
+      const target = this.suspended || !field ? entry.origin : this.targetFor(entry, current, field);
       const settled = boundsSettled(current, target);
       const interactive = settled && isSamePosition(target, entry.origin);
       this.setInteractive(entry, interactive);
@@ -251,6 +268,7 @@ export class AvoidanceService {
 
   exit() {
     this.phase = "idle";
+    this.suspended = false;
     this.stopLoop();
     this.lastTickAt = null;
     this.entries.clear();

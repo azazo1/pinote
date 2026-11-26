@@ -99,6 +99,17 @@ export class WindowManager {
     return this.avoidance.finish();
   }
 
+  // 保持模式下按住修饰键: 临时取消避让; 松开恢复.
+  suspendAvoidance() {
+    if (this.quitting) return false;
+    return this.avoidance.suspend();
+  }
+
+  resumeAvoidance() {
+    if (this.quitting) return false;
+    return this.avoidance.resume();
+  }
+
   // 参与避让的窗口: 可见便签窗口与侧边架, 排除正在展开编辑、拖动/缩放、尺寸动画中的窗口.
   avoidanceTargetCandidates() {
     const active = this.getActiveWindow();

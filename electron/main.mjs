@@ -143,6 +143,8 @@ function startApplication() {
       logger: log,
       onPress: () => windows.beginAvoidance(),
       onRelease: () => windows.endAvoidance(),
+      onSuspend: () => windows.suspendAvoidance(),
+      onResume: () => windows.resumeAvoidance(),
     });
     void modifierWatcher.start();
     updateService.initialize();

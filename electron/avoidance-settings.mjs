@@ -3,12 +3,13 @@
 
 export const AVOIDANCE_MODIFIERS = Object.freeze(["meta", "alt", "control", "shift"]);
 
-// 与 native/mac-modifier-state 输出的位掩码保持一致.
-export const AVOIDANCE_MODIFIER_BITS = Object.freeze({
-  meta: 1,
-  alt: 2,
-  control: 4,
-  shift: 8,
+// 与 native/mac-modifier-state 输出的位掩码保持一致: 左右两侧分开上报,
+// 双击手势要求同一侧连续按下两次.
+export const AVOIDANCE_MODIFIER_SIDES = Object.freeze({
+  meta: { left: 1, right: 16 },
+  alt: { left: 2, right: 32 },
+  control: { left: 4, right: 64 },
+  shift: { left: 8, right: 128 },
 });
 
 // macOS 用 Command, Windows 与 Linux 用 Alt: 单按都不会产生输入副作用, 也不会触发系统菜单.

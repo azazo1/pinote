@@ -128,6 +128,56 @@ describe("ModifierWatcher", () => {
     watcher.handleMask(0);
   });
 
+  it("reverses while the key is held in latch mode", () => {
+    const onSuspend = vi.fn();
+    const onResume = vi.fn();
+    const { watcher } = createWatcher({ onSuspend, onResume });
+
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+
+    // 保持模式下再按住: 反向, 临时取消避让.
+    clock += 400;
+    watcher.handleMask(1);
+    expect(onSuspend).toHaveBeenCalledTimes(1);
+
+    watcher.handleMask(0);
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not latch when the two presses are on different sides", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(1);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(16);
+    vi.advanceTimersByTime(AVOIDANCE_HOLD_DELAY_MS);
+    expect(onPress).toHaveBeenCalledTimes(1);
+
+    // 不是保持: 松开后正常恢复.
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 2);
+    expect(onRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches when the same side is pressed twice", () => {
+    const { watcher, onPress, onRelease } = createWatcher();
+
+    watcher.handleMask(16);
+    watcher.handleMask(0);
+    clock += 150;
+    watcher.handleMask(16);
+    expect(onPress).toHaveBeenCalledTimes(1);
+
+    watcher.handleMask(0);
+    vi.advanceTimersByTime(AVOIDANCE_RELEASE_DEBOUNCE_MS * 2);
+    expect(onRelease).not.toHaveBeenCalled();
+  });
+
   it("cancels a latch automatically after the timeout", () => {
     const { watcher, onPress, onRelease } = createWatcher();
 
