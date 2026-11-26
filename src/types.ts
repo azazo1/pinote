@@ -111,8 +111,6 @@ export interface AvoidanceSettings {
   modifier: AvoidanceModifier;
   options: AvoidanceModifierOption[];
   latchTimeout: boolean;
-  caretEnabled: boolean;
-  caretTrusted: boolean | null;
 }
 
 export interface GeneralSettings {
@@ -268,8 +266,6 @@ export interface NoteAPI {
   ) => Promise<AppSettings>;
   updateAvoidanceModifier: (modifier: AvoidanceModifier) => Promise<AppSettings>;
   updateAvoidanceLatchTimeout: (enabled: boolean) => Promise<AppSettings>;
-  updateAvoidanceCaret: (enabled: boolean) => Promise<AppSettings>;
-  requestAccessibilityPermission: () => Promise<boolean>;
   resetShortcut: (id: ShortcutCommandId) => Promise<AppSettings>;
   resetShortcuts: () => Promise<AppSettings>;
   getAppInfo: () => Promise<AppInfo>;

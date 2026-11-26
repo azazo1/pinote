@@ -4,7 +4,6 @@ import {
   AVOIDANCE_SMOOTH_TAU_MS,
   approachBounds,
   avoidanceField,
-  avoidanceFieldFromRect,
   avoidancePushCandidates,
   boundsSettled,
   rectIntersectsCircle,
@@ -22,8 +21,6 @@ export class AvoidanceService {
     getCursor,
     getFocusedWindow = () => null,
     displayFor,
-    getCaret = () => null,
-    isCaretEnabled = () => false,
     logger = { info() {}, warn() {} },
     smoothTauMs = AVOIDANCE_SMOOTH_TAU_MS,
     followMs = AVOIDANCE_FOLLOW_MS,
@@ -35,8 +32,6 @@ export class AvoidanceService {
     this.getCursor = getCursor ?? (() => null);
     this.getFocusedWindow = getFocusedWindow;
     this.displayFor = displayFor ?? (() => null);
-    this.getCaret = getCaret;
-    this.isCaretEnabled = isCaretEnabled;
     this.logger = logger;
     this.smoothTauMs = smoothTauMs;
     this.followMs = followMs;
@@ -131,7 +126,7 @@ export class AvoidanceService {
     this.lastTickAt = nowMs;
     // 与帧率无关的指数靠近: 60Hz 和 30Hz 下移动速度一致.
     const factor = 1 - Math.exp(-Math.min(elapsed, 64) / this.smoothTauMs);
-    const fields = this.phase === "field" ? this.currentFields() : [];
+    const field = this.phase === "field" ? avoidanceField(this.getCursor()) : null;
     const focused = this.getFocusedWindow() ?? null;
     this.restoreFocusReleasedWindows(focused);
     let moving = false;
@@ -149,7 +144,7 @@ export class AvoidanceService {
       }
       const current = window.getBounds();
       // 临时取消避让时不推, 直接回原位.
-      const target = this.suspended || fields.length === 0 ? entry.origin : this.targetFor(entry, current, fields);
+      const target = this.suspended || !field ? entry.origin : this.targetFor(entry, current, field);
       const settled = boundsSettled(current, target);
       const interactive = settled && isSamePosition(target, entry.origin);
       this.setInteractive(entry, interactive);
@@ -173,25 +168,12 @@ export class AvoidanceService {
     }
   }
 
-  // 当前所有立场: 鼠标, 以及启用且可读时的文本插入点.
-  currentFields() {
-    const fields = [];
-    const mouse = avoidanceField(this.getCursor());
-    if (mouse) fields.push(mouse);
-    if (this.isCaretEnabled()) {
-      const caret = this.getCaret();
-      const caretField = caret ? avoidanceFieldFromRect(caret) : null;
-      if (caretField) fields.push(caretField);
-    }
-    return fields;
-  }
-
-  // 目标位置: 始终按"原位"算出所有立场外的最小旁位, 不按当前位置累加.
-  targetFor(entry, current, fields) {
-    if (this.phase !== "field" || fields.length === 0) return entry.origin;
-    const releaseFields = fields.map((field) => ({ ...field, radius: field.radius + AVOIDANCE_RELEASE_MARGIN }));
-    const originBlocked = fields.some((field) => rectIntersectsCircle(entry.origin, field));
-    const currentBlocked = fields.some((field) => rectIntersectsCircle(current, field));
+  // 目标位置: 始终按"原位"算出立场外的最小旁位, 不按当前位置累加, 因此不会一路往下推.
+  targetFor(entry, current, field) {
+    if (this.phase !== "field" || !field) return entry.origin;
+    const releaseCircle = { ...field, radius: field.radius + AVOIDANCE_RELEASE_MARGIN };
+    const originBlocked = rectIntersectsCircle(entry.origin, field);
+    const currentBlocked = rectIntersectsCircle(current, field);
 
     if (!entry.avoiding) {
       if (!originBlocked && !currentBlocked) return entry.origin;
@@ -199,7 +181,7 @@ export class AvoidanceService {
     }
     // 回位只看原位: 原位已离开立场 (含去抖圈) 就必须回原位.
     // 之前要求"当前位置也不在立场内"才回位, 推位若被边缘挡在立场边上, 便签会一直停在那里.
-    const originInRelease = releaseFields.some((field) => rectIntersectsCircle(entry.origin, field));
+    const originInRelease = rectIntersectsCircle(entry.origin, releaseCircle);
     if (!originInRelease) {
       entry.avoiding = false;
       entry.target = entry.origin;
@@ -207,30 +189,18 @@ export class AvoidanceService {
     }
     // 原位仍在立场/去抖圈内: 推开; 推位若还压在立场里, 也重新按原位推.
     if (originBlocked || currentBlocked) {
-      const pushed = this.pushFrom(entry, entry.origin, fields);
+      const pushed = this.pushFrom(entry, entry.origin, field);
       if (pushed) return pushed;
     }
     return entry.target ?? entry.origin;
   }
 
-  // 依次把便签推出每个立场; 最后仍与任一立场相交就放弃这次推开.
-  pushFrom(entry, bounds, fields) {
+  pushFrom(entry, bounds, field) {
     // 系统 UI (菜单栏/任务栏/Dock) 占用的那一侧会被顶住, 排序里已降到后面.
-    const display = this.displayFor(bounds);
-    let target = bounds;
-    for (let pass = 0; pass < 4; pass += 1) {
-      const blocking = fields.find((field) => rectIntersectsCircle(target, field));
-      if (!blocking) {
-        entry.target = target;
-        return target;
-      }
-      const candidates = avoidancePushCandidates(target, blocking, display);
-      if (candidates.length === 0) return null;
-      target = candidates[0].target;
-    }
-    if (fields.some((field) => rectIntersectsCircle(target, field))) return null;
-    entry.target = target;
-    return target;
+    const candidates = avoidancePushCandidates(bounds, field, this.displayFor(bounds));
+    if (candidates.length === 0) return null;
+    entry.target = candidates[0].target;
+    return entry.target;
   }
 
   trackTargets() {

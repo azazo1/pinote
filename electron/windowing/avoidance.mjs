@@ -19,18 +19,6 @@ export function avoidanceField(pointer) {
   return { x: pointer.x, y: pointer.y, radius: AVOIDANCE_RADIUS + AVOIDANCE_GAP };
 }
 
-// 文本插入点矩形对应的立场圆, 以矩形中心为圆心, 半径与鼠标立场相同.
-export function avoidanceFieldFromRect(rect) {
-  if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)) return null;
-  const width = Number.isFinite(rect.width) ? Math.max(0, rect.width) : 0;
-  const height = Number.isFinite(rect.height) ? Math.max(0, rect.height) : 0;
-  return {
-    x: rect.x + width / 2,
-    y: rect.y + height / 2,
-    radius: AVOIDANCE_RADIUS + AVOIDANCE_GAP,
-  };
-}
-
 // 矩形与立场是否相交, 用"圆心到矩形的最近点"判断.
 export function rectIntersectsCircle(bounds, circle) {
   if (!isFiniteBounds(bounds) || !circle) return false;

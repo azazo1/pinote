@@ -718,20 +718,6 @@ describe("NoteStore", () => {
     expect(restored.getPreferences().hideDockOnMainClose).toBe(true);
   });
 
-  it("persists the caret avoidance preference", async () => {
-    const dataPath = testStorePath();
-    const store = new NoteStore(dataPath);
-    await store.load();
-    expect(store.getPreferences().avoidanceCaret).toBe(false);
-
-    store.updatePreferences({ avoidanceCaret: true });
-    await store.save();
-
-    const restored = new NoteStore(dataPath);
-    await restored.load();
-    expect(restored.getPreferences().avoidanceCaret).toBe(true);
-  });
-
   it("persists the avoidance latch timeout preference", async () => {
     const dataPath = testStorePath();
     const store = new NoteStore(dataPath);

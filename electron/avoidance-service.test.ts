@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AvoidanceService } from "./avoidance-service.mjs";
-import { avoidanceField, avoidanceFieldFromRect, rectIntersectsCircle } from "./windowing/avoidance.mjs";
+import { avoidanceField, rectIntersectsCircle } from "./windowing/avoidance.mjs";
 
 const area = { x: 0, y: 0, width: 1440, height: 900 };
 const noteBounds = { x: 600, y: 380, width: 253, height: 220 };
@@ -40,8 +40,6 @@ function createFakeWindow(bounds: Bounds = noteBounds) {
 
 let clock = 0;
 let cursor = { x: 0, y: 0 };
-let caret = null;
-let caretEnabled = false;
 let focused: FakeWindow | null = null;
 
 function createService(targets: FakeWindow[], customDisplay = null) {
@@ -53,8 +51,6 @@ function createService(targets: FakeWindow[], customDisplay = null) {
       .map((window) => ({ key: String(targets.indexOf(window)), window })),
     getCursor: () => cursor,
     getFocusedWindow: () => focused,
-    getCaret: () => caret,
-    isCaretEnabled: () => caretEnabled,
     displayFor: () => targetDisplay,
     now: () => clock,
     logger: { info() {}, warn() {} },
@@ -78,8 +74,6 @@ beforeEach(() => {
   clock = 0;
   cursor = { x: 0, y: 0 };
   focused = null;
-  caret = null;
-  caretEnabled = false;
   display = { bounds: area, workArea: area };
 });
 
@@ -199,32 +193,6 @@ describe("AvoidanceService", () => {
 
     expect(note.getBounds()).toEqual(noteBounds);
     expect(note.ignoring).toBe(false);
-  });
-
-  it("avoids the caret position when caret avoidance is enabled", () => {
-    const note = createFakeWindow();
-    const service = createService([note]);
-    cursor = { x: 60, y: 860 };
-    caret = { x: 690, y: 490, width: 2, height: 18 };
-    caretEnabled = true;
-    service.start();
-    advance(600);
-
-    const caretField = avoidanceFieldFromRect(caret);
-    expect(note.getBounds()).not.toEqual(noteBounds);
-    expect(rectIntersectsCircle(note.getBounds(), caretField)).toBe(false);
-  });
-
-  it("ignores the caret when caret avoidance is disabled", () => {
-    const note = createFakeWindow();
-    const service = createService([note]);
-    cursor = { x: 60, y: 860 };
-    caret = { x: 690, y: 490, width: 2, height: 18 };
-    caretEnabled = false;
-    service.start();
-    advance(600);
-
-    expect(note.getBounds()).toEqual(noteBounds);
   });
 
   it("returns to origin when the pointer leaves even if the pushed position still overlaps", () => {

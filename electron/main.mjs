@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -94,8 +94,6 @@ function startApplication() {
       showDock: showDockIcon,
       hideDock: hideDockIcon,
       isAppActive: () => process.platform === "darwin" ? app.isActive() : Boolean(BrowserWindow.getFocusedWindow()),
-      getCaret: () => modifierWatcher?.getCaretRect?.() ?? null,
-      isCaretEnabled: () => store.getPreferences().avoidanceCaret,
     });
     sync = new SyncService(store, windows);
     updateWindow = new UpdateWindow();
@@ -147,7 +145,6 @@ function startApplication() {
       onRelease: () => windows.endAvoidance(),
       onSuspend: () => windows.suspendAvoidance(),
       onResume: () => windows.resumeAvoidance(),
-      onAccessibilityChange: () => broadcastSettings(),
     });
     void modifierWatcher.start();
     updateService.initialize();
@@ -350,19 +347,6 @@ function registerIpc() {
     log.info("便签避让按键已更新", { modifier: normalized });
     broadcastSettings();
     return getAppSettings();
-  });
-  ipcMain.handle("settings:update-avoidance-caret", (_event, enabled) => {
-    const next = Boolean(enabled);
-    store.updatePreferences({ avoidanceCaret: next });
-    log.info("文本光标避让已更新", { enabled: next });
-    broadcastSettings();
-    return getAppSettings();
-  });
-  ipcMain.handle("settings:request-accessibility", () => {
-    const trusted = systemPreferences.isTrustedAccessibilityClient(true);
-    log.info("请求辅助功能权限", { trusted });
-    broadcastSettings();
-    return trusted;
   });
   ipcMain.handle("settings:update-avoidance-latch", (_event, enabled) => {
     const next = Boolean(enabled);
@@ -624,8 +608,6 @@ function getAppSettings() {
       modifier: preferences.avoidanceModifier,
       options: avoidanceModifierOptions(process.platform),
       latchTimeout: preferences.avoidanceLatchTimeout,
-      caretEnabled: preferences.avoidanceCaret,
-      caretTrusted: modifierWatcher?.getAccessibilityTrusted?.() ?? null,
     },
   };
 }
