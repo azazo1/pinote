@@ -66,6 +66,8 @@ let quitStarted = false;
 let quitReady = false;
 let quitConfirmationOpen = false;
 let quitForUpdate = false;
+let activeWatchTimer = null;
+let lastAppActive = null;
 
 if (!acquireSingleInstanceLock({
   app,
@@ -147,6 +149,7 @@ function startApplication() {
       onResume: () => windows.resumeAvoidance(),
     });
     void modifierWatcher.start();
+    startActiveWatch();
     updateService.initialize();
     const startHidden = store.getPreferences().startHidden || process.argv.includes(LOGIN_HIDDEN_ARGUMENT);
     if (!startHidden) windows.openMainWindow();
@@ -225,6 +228,10 @@ function startApplication() {
     updateService?.dispose();
     shortcutManager?.dispose();
     modifierWatcher?.dispose();
+    if (activeWatchTimer !== null) {
+      clearInterval(activeWatchTimer);
+      activeWatchTimer = null;
+    }
     tray?.destroy();
     tray = null;
     trayController = null;
@@ -551,6 +558,20 @@ async function confirmAndQuit(owner) {
   } finally {
     quitConfirmationOpen = false;
   }
+}
+
+// 兜底: 不依赖窗口焦点事件, 直接轮询应用是否还在前台.
+// macOS 的 panel 便签在 Electron 里的 focus/blur 报告不可靠, 事件偶尔也不会来;
+// 点击全屏应用后如果事件丢了, 编辑窗口会一直挂着, 便签就永远不参与避让.
+function startActiveWatch() {
+  if (activeWatchTimer !== null) return;
+  activeWatchTimer = setInterval(() => {
+    const active = app.isActive();
+    if (active === lastAppActive) return;
+    lastAppActive = active;
+    log.info("应用前台状态更新", { active });
+    if (!active) windows?.clearEditingWindow(null, "poll-inactive");
+  }, 500);
 }
 
 // 修饰键轮询 helper 在打包后位于 Resources 根目录, 开发时用构建产物.
