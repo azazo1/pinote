@@ -136,15 +136,19 @@ export class WindowManager {
   }
 
   // 展开状态且正在交互的便签才算"正在编辑", 收起的小条继续参与避让.
+  // 注意: active 是"最近点击的窗口", 失焦后仍然保留; 因此还要求应用仍在前台,
+  // 否则切到其他应用后再按修饰键, 之前点过的便签会永远被当成编辑中而不让开.
   isNoteBeingEdited(id, window, active) {
     if (this.store.getWindowState(id).collapsed) return false;
-    return window === active;
+    if (window !== active) return false;
+    return this.isAppActive();
   }
 
   // 避让循环里"正在编辑"的窗口: 同样只认展开状态的便签, 收起的小条继续被推开.
+  // 应用不在前台时返回 null: 失焦的便签不再阻止避让.
   getAvoidanceEditingWindow() {
     const active = this.getActiveWindow();
-    if (!active || active.isDestroyed()) return null;
+    if (!active || active.isDestroyed() || !this.isAppActive()) return null;
     const noteId = this.noteIdForWindow(active);
     if (noteId && this.store.getWindowState(noteId).collapsed) return null;
     return active;
