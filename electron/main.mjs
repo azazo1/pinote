@@ -1,7 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, systemPreferences } from "electron";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import log from "electron-log/main.js";
 import { configureAppLogging, installProcessErrorHandlers, logRuntimeInfo, setLogLevel } from "./app-logging.mjs";
@@ -67,11 +66,6 @@ let quitStarted = false;
 let quitReady = false;
 let quitConfirmationOpen = false;
 let quitForUpdate = false;
-let caretApi = null;
-let caretTimer = null;
-let caretRect = null;
-let accessibilityTrusted = null;
-let lastBroadcastTrust = null;
 
 if (!acquireSingleInstanceLock({
   app,
@@ -100,7 +94,7 @@ function startApplication() {
       showDock: showDockIcon,
       hideDock: hideDockIcon,
       isAppActive: () => process.platform === "darwin" ? app.isActive() : Boolean(BrowserWindow.getFocusedWindow()),
-      getCaret: () => caretRect,
+      getCaret: () => modifierWatcher?.getCaretRect?.() ?? null,
       isCaretEnabled: () => store.getPreferences().avoidanceCaret,
     });
     sync = new SyncService(store, windows);
@@ -153,9 +147,9 @@ function startApplication() {
       onRelease: () => windows.endAvoidance(),
       onSuspend: () => windows.suspendAvoidance(),
       onResume: () => windows.resumeAvoidance(),
+      onAccessibilityChange: () => broadcastSettings(),
     });
     void modifierWatcher.start();
-    startCaretTracker();
     updateService.initialize();
     const startHidden = store.getPreferences().startHidden || process.argv.includes(LOGIN_HIDDEN_ARGUMENT);
     if (!startHidden) windows.openMainWindow();
@@ -230,10 +224,6 @@ function startApplication() {
 
   app.on("will-quit", () => {
     log.info("Pinote 正在退出", { version: runtimeVersion });
-    if (caretTimer !== null) {
-      clearInterval(caretTimer);
-      caretTimer = null;
-    }
     releaseSingleInstanceLock({ app });
     updateService?.dispose();
     shortcutManager?.dispose();
@@ -579,52 +569,6 @@ async function confirmAndQuit(owner) {
   }
 }
 
-// 主进程读取文本插入点的原生模块与轮询: 辅助功能授权作用于 Pinote 本身.
-function startCaretTracker() {
-  if (process.platform !== "darwin") return;
-  const modulePath = app.isPackaged
-    ? path.join(process.resourcesPath, "pinote-ax.node")
-    : path.join(currentDir, "..", "build", "generated", "pinote-ax.node");
-  try {
-    const require = createRequire(import.meta.url);
-    caretApi = require(modulePath);
-  } catch (error) {
-    log.warn("文本光标读取模块不可用", {
-      modulePath,
-      message: error instanceof Error ? error.message : "未知错误",
-    });
-    return;
-  }
-  caretTimer = setInterval(() => {
-    let trusted = false;
-    try {
-      trusted = Boolean(caretApi?.isTrusted?.());
-    } catch {
-      trusted = false;
-    }
-    if (trusted !== accessibilityTrusted) {
-      accessibilityTrusted = trusted;
-      if (lastBroadcastTrust !== trusted) {
-        lastBroadcastTrust = trusted;
-        log.info("辅助功能权限状态更新", { trusted });
-        broadcastSettings();
-      }
-    }
-    if (!trusted || !store.getPreferences().avoidanceCaret) {
-      caretRect = null;
-      return;
-    }
-    try {
-      const rect = caretApi?.getCaretRect?.();
-      caretRect = rect && Number.isFinite(rect.x) && Number.isFinite(rect.y)
-        ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-        : null;
-    } catch {
-      caretRect = null;
-    }
-  }, 100);
-}
-
 // 修饰键轮询 helper 在打包后位于 Resources 根目录, 开发时用构建产物.
 function resolveAvoidanceHelperPath() {
   if (process.platform !== "darwin") return null;
@@ -681,7 +625,7 @@ function getAppSettings() {
       options: avoidanceModifierOptions(process.platform),
       latchTimeout: preferences.avoidanceLatchTimeout,
       caretEnabled: preferences.avoidanceCaret,
-      caretTrusted: accessibilityTrusted,
+      caretTrusted: modifierWatcher?.getAccessibilityTrusted?.() ?? null,
     },
   };
 }
