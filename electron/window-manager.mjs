@@ -80,6 +80,8 @@ export class WindowManager {
     this.wayland = isWaylandSession();
     this.trayAvailable = false;
     this.quitting = false;
+    // 显式记录"正在编辑"的窗口: 由焦点事件维护, 不依赖 Electron 对 panel 的 focus 报告.
+    this.editingWindow = null;
     this.ignoreMainActivationUntil = 0;
 
     screen.on("display-removed", () => this.constrainAllWindows());
@@ -114,12 +116,12 @@ export class WindowManager {
 
   // 参与避让的窗口: 可见便签窗口与侧边架, 排除正在展开编辑、拖动/缩放、尺寸动画中的窗口.
   avoidanceTargetCandidates() {
-    const active = this.getActiveWindow();
+    const editing = this.editingWindow;
     const targets = [];
     for (const [id, window] of this.windows) {
       if (window.isDestroyed() || !window.isVisible()) continue;
       // 展开且正在编辑的便签不参与避让; 收起的小条仍然让开.
-      if (this.isNoteBeingEdited(id, window, active)) continue;
+      if (this.isNoteBeingEdited(id, window)) continue;
       if (this.moveSessions.has(id) || this.resizeSessions.has(id) || this.transitioningNotes.has(id)) continue;
       if (this.animatingWindows.has(window.id)) continue;
       targets.push({ key: id, window });
@@ -130,30 +132,32 @@ export class WindowManager {
       && !shelf.isDestroyed()
       && shelf.isVisible()
       && !this.animatingWindows.has(shelf.id)
-      && !this.isShelfBeingEdited(shelf, active)
+      && !this.isShelfBeingEdited(shelf, editing)
     ) {
       targets.push({ key: "shelf", window: shelf });
     }
     return targets;
   }
 
-  // 展开状态且正在交互的便签才算"正在编辑", 收起的小条继续参与避让.
-  // 注意: active 是"最近点击的窗口", 失焦后仍然保留; 因此还要求应用仍在前台,
-  // 否则切到其他应用后再按修饰键, 之前点过的便签会永远被当成编辑中而不让开.
-  isNoteBeingEdited(id, window, active) {
+  // 展开状态且真正持有焦点的便签才算"正在编辑", 收起的小条继续参与避让.
+  // 使用焦点事件维护的 editingWindow, 而不是"最近点击窗口"或 app.isActive():
+  // 后者在失焦后仍然为真, 会让展开的便签永远不参与避让.
+  isNoteBeingEdited(id, window) {
     if (this.store.getWindowState(id).collapsed) return false;
-    if (window !== active) return false;
-    return this.isAppActive();
+    return window === this.editingWindow;
   }
 
   // 避让循环里"正在编辑"的窗口: 同样只认展开状态的便签, 收起的小条继续被推开.
-  // 应用不在前台时返回 null: 失焦的便签不再阻止避让.
+  // 失焦 (窗口 blur / 切换到其他窗口) 时 editingWindow 会被清掉或替换.
   getAvoidanceEditingWindow() {
-    const active = this.getActiveWindow();
-    if (!active || active.isDestroyed() || !this.isAppActive()) return null;
-    const noteId = this.noteIdForWindow(active);
+    const window = this.editingWindow;
+    if (!window || window.isDestroyed()) {
+      this.editingWindow = null;
+      return null;
+    }
+    const noteId = this.noteIdForWindow(window);
     if (noteId && this.store.getWindowState(noteId).collapsed) return null;
-    return active;
+    return window;
   }
 
   noteIdForWindow(window) {
@@ -335,6 +339,8 @@ export class WindowManager {
     const window = new BrowserWindow(options);
 
     this.windows.set(note.id, window);
+    // 窗口失焦: 该便签立刻不再算编辑中, 保持避让期间也要重新参与.
+    window.on("blur", () => this.clearEditingWindow(window));
     // 刚打开的窗口不参与当前这轮避让, 免得用户新建的便签立刻被推走.
     this.avoidance.release(window);
     if (process.platform === "darwin") {
@@ -406,7 +412,10 @@ export class WindowManager {
 
   closeNote(id) {
     const window = this.windows.get(id);
-    if (window) this.avoidance.release(window);
+    if (window) {
+      this.clearEditingWindow(window);
+      this.avoidance.release(window);
+    }
     if (this.store.getDockState(id) === "shelf") return this.closeDockedNote(id);
     if (this.store.isDraft(id)) {
       this.remove(id);
@@ -669,10 +678,21 @@ export class WindowManager {
     return BrowserWindow.getFocusedWindow();
   }
 
+  setEditingWindow(window) {
+    if (!window || window.isDestroyed?.()) return;
+    this.editingWindow = window;
+  }
+
+  clearEditingWindow(window = null) {
+    if (window && this.editingWindow !== window) return;
+    this.editingWindow = null;
+  }
+
   focusForEditing(window) {
     if (!window || window.isDestroyed()) return;
     // 用户每一次显式聚焦都同步更新"当前便签", 不依赖窗口系统报告 focus 状态.
     this.markActiveWindow(window);
+    this.setEditingWindow(window);
     if (!window.isFocusable()) window.setFocusable(true);
     // macOS 的 panel 可在其他应用仍处于前台时成为 key window.
     // 点击勾选框这类非文本控件时 panel 可能不会自动成为键盘窗口, 因此这里强制聚焦,
@@ -1462,6 +1482,8 @@ export class WindowManager {
   }
 
   handleApplicationBlur() {
+    // 切换到其他应用: 任何便签都不再是编辑中.
+    this.clearEditingWindow();
     this.scheduleAppBlurHide();
   }
 
