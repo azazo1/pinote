@@ -275,9 +275,6 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
                     ? "辅助功能权限: 已授予"
                     : "辅助功能权限: 未授予, 光标避让不会生效"}
               </span>
-              <span className="shortcut-hint">
-                {"按钮会打开 系统设置 > 辅助功能; 若已勾选但仍不生效, 移除 Pinote/Electron 后重新添加"}
-              </span>
             </div>
             <button
               className="settings-text-command"

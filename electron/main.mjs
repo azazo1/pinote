@@ -370,17 +370,6 @@ function registerIpc() {
   });
   ipcMain.handle("settings:request-accessibility", () => {
     const trusted = systemPreferences.isTrustedAccessibilityClient(true);
-    // 即使报告"已授予"也打开系统设置页面: adhoc 签名下这个值可能是假的,
-    // 用户需要自己到列表里确认/重新添加.
-    if (process.platform === "darwin") {
-      const major = Number.parseInt(process.getSystemVersion().split(".")[0], 10);
-      const url = major >= 13
-        ? "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
-        : "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-      shell.openExternal(url).catch((error) => {
-        log.warn("打开辅助功能设置页面失败", { message: error instanceof Error ? error.message : "未知错误" });
-      });
-    }
     log.info("请求辅助功能权限", { trusted });
     broadcastSettings();
     return trusted;
