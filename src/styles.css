@@ -52,6 +52,12 @@ button {
   grid-template-rows: 22px;
 }
 
+.note-shell.is-collapsed[data-platform="win32"] {
+  max-height: 22px;
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--note-bar);
+}
+
 .note-shell[data-platform="darwin"] {
   /* 在透明窗口内留出阴影空间, 让同色便签叠放时也能看清边缘. */
   margin-inline: 1px;

@@ -33,6 +33,20 @@ const MACOS_WORKSPACE_OPTIONS = {
   skipTransformProcessType: true,
 };
 
+// Chromium 会按窗口当前的 DPI 把逻辑坐标换成原生窗口区域.
+const collapsedShapeScales = new WeakMap();
+function syncCollapsedShape(window, collapsed) {
+  if (process.platform !== "win32") return;
+  if (!collapsed) {
+    if (collapsedShapeScales.delete(window)) window.setShape([]);
+    return;
+  }
+  const { scaleFactor } = screen.getDisplayMatching(window.getBounds());
+  if (collapsedShapeScales.get(window) === scaleFactor) return;
+  collapsedShapeScales.set(window, scaleFactor);
+  window.setShape([{ x: 0, y: 0, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }]);
+}
+
 export class WindowManager {
   constructor(store, { requestQuit, showDock, hideDock, isAppActive } = {}) {
     this.store = store;
@@ -335,6 +349,11 @@ export class WindowManager {
       webPreferences: rendererPreferences(),
     };
     const window = new BrowserWindow(options);
+    if (process.platform === "win32") {
+      const refreshShape = () => syncCollapsedShape(window, this.store.getWindowState(note.id).collapsed);
+      refreshShape();
+      window.on("move", refreshShape);
+    }
 
     this.windows.set(note.id, window);
     // 窗口失焦: 该便签立刻不再算编辑中, 保持避让期间也要重新参与.
@@ -527,6 +546,7 @@ export class WindowManager {
           : { ...bounds, height: Math.max(state.bounds.height, bounds.height) },
         collapsed: true,
       });
+      syncCollapsedShape(window, true);
       window.setMinimumSize(COLLAPSED_WIDTH, COLLAPSED_HEIGHT);
       this.animateBounds(window, {
         x: bounds.x + bounds.width - COLLAPSED_WIDTH,
@@ -546,6 +566,7 @@ export class WindowManager {
         height: state.bounds.height,
       };
       this.store.updateWindow(id, { bounds: docked ? state.bounds : target, collapsed: false });
+      syncCollapsedShape(window, false);
       window.setResizable(this.wayland);
       this.animateBounds(window, target, WINDOW_ANIMATION_MS, () => {
         window.setMinimumSize(COLLAPSED_WIDTH, 180);
@@ -1674,6 +1695,7 @@ export class WindowManager {
     const target = state.collapsed
       ? { ...bounds, x: bounds.x + bounds.width - COLLAPSED_WIDTH, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
       : bounds;
+    syncCollapsedShape(window, state.collapsed);
     window.setMinimumSize(COLLAPSED_WIDTH, state.collapsed ? COLLAPSED_HEIGHT : 180);
     window.setResizable(this.wayland && !state.collapsed);
     this.applyPinnedLevel(window, state.pinned);
