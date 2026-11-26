@@ -16,13 +16,16 @@ export const AVOIDANCE_MIN_TAP_GAP_MS = 100;
 export const AVOIDANCE_DOUBLE_TAP_MS = 300;
 // 双击进入"保持避让"后, 这么久没有再次双击就自动取消.
 export const AVOIDANCE_LATCH_TIMEOUT_MS = 30_000;
+// 与 macOS helper 的输出一致, 只标记是否有其他键按住, 不传输具体键值.
+const OTHER_KEY_DOWN = 256;
 
 // 监听"按住/双击某个修饰键"的后端:
 // - macOS: 常驻 native/mac-modifier-state 子进程轮询修饰键状态, 只读状态, 不需要辅助功能权限.
 // - Windows / Linux: 用 uiohook 的全局键盘钩子, 系统不需要额外授权.
-// 两种后端都只上报修饰键位掩码, 不拦截按键, 也不改变焦点.
+// 两种后端都只用按键活动判断手势, 不拦截按键, 也不改变焦点.
 //
-// 交互: 按住 = 临时避让, 松开恢复; 同一侧连续两次按下 = 切换"保持避让", 再同侧双击解除.
+// 交互: 按住 = 临时避让, 松开恢复; 同一侧独立短按两次 = 切换保持, 第二次松开后确认.
+// 期间出现普通按键或其他修饰键就取消双击候选, 避免把组合快捷键当成双击.
 // 左右两侧分开判定, 左一次右一次不算双击. 保持期间按住 = 反向, 临时取消避让.
 // 双击进入保持后, 默认 30 秒没有再次双击会自动取消.
 export class ModifierWatcher {
@@ -77,6 +80,11 @@ export class ModifierWatcher {
     this.latchTimer = null;
     this.lastPressAt = null;
     this.lastPressSide = null;
+    this.currentPressAt = null;
+    this.currentPressSide = null;
+    this.doubleTapPending = false;
+    this.keyDownCount = null;
+    this.otherKeysDown = new Set();
     this.deviceSidesAvailable = true;
     this.fired = false;
     this.latched = false;
@@ -136,8 +144,9 @@ export class ModifierWatcher {
     this.cancelRelease();
     this.clearLatchTimer();
     this.pressed = false;
-    this.lastPressAt = null;
-    this.lastPressSide = null;
+    this.invalidateTap();
+    this.currentPressAt = null;
+    this.otherKeysDown.clear();
     this.fired = false;
     this.latched = false;
     const reader = this.reader;
@@ -197,8 +206,14 @@ export class ModifierWatcher {
           }
           return;
         }
-        const mask = Number.parseInt(text, 10);
-        if (Number.isFinite(mask)) this.handleMask(mask);
+        // helper 同时上报普通按键事件计数, 捕捉两次轮询之间已经松开的短按.
+        const parts = text.split(/\s+/);
+        if (parts.length !== 2) return;
+        const [mask, keyDownCount] = parts.map(Number);
+        if (Number.isInteger(mask) && mask >= 0 && mask <= 511
+          && Number.isInteger(keyDownCount) && keyDownCount >= 0) {
+          this.handleMask(mask, keyDownCount);
+        }
       });
       child.on("error", (error) => {
         this.logger.warn("便签避让 helper 运行失败", { message: errorMessage(error) });
@@ -213,11 +228,7 @@ export class ModifierWatcher {
         this.reader = null;
         if (this.disposed) return;
         this.started = false;
-        this.latched = false;
-        this.lastPressAt = null;
-        this.lastPressSide = null;
-        this.clearLatchTimer();
-        this.releaseHold();
+        this.resetPressState();
         this.logger.warn("便签避让 helper 已退出", { code, signal });
       });
       return true;
@@ -248,51 +259,65 @@ export class ModifierWatcher {
   }
 
   handleHookKeyDown = (event) => {
-    const bit = this.keycodeMap?.get(event?.keycode);
-    if (!bit || (this.mask & bit) !== 0) return;
-    this.mask |= bit;
+    if (!Number.isFinite(event?.keycode)) return;
+    const bit = this.keycodeMap?.get(event.keycode);
+    if (!bit) {
+      this.otherKeysDown.add(event.keycode);
+      this.mask |= OTHER_KEY_DOWN;
+    } else {
+      if ((this.mask & bit) !== 0) return;
+      this.mask |= bit;
+    }
     this.handleMask(this.mask);
   };
 
   handleHookKeyUp = (event) => {
     const bit = this.keycodeMap?.get(event?.keycode);
-    if (!bit) return;
-    this.mask &= ~bit;
+    if (bit) this.mask &= ~bit;
+    else {
+      this.otherKeysDown.delete(event?.keycode);
+      if (this.otherKeysDown.size === 0) this.mask &= ~OTHER_KEY_DOWN;
+    }
     this.handleMask(this.mask);
   };
 
-  handleMask(mask) {
+  invalidateTap() {
+    this.lastPressAt = null;
+    this.lastPressSide = null;
+    this.currentPressSide = null;
+    this.doubleTapPending = false;
+  }
+
+  handleMask(mask, keyDownCount = null) {
     if (this.disposed) return;
     const sides = AVOIDANCE_MODIFIER_SIDES[this.modifier];
     if (!sides) return;
     const left = (mask & sides.left) !== 0;
     const right = (mask & sides.right) !== 0;
     const down = left || right;
+    const keyActivity = keyDownCount !== null && this.keyDownCount !== null && keyDownCount !== this.keyDownCount;
+    if (keyDownCount !== null) this.keyDownCount = keyDownCount;
+    const chord = (mask & ~(sides.left | sides.right)) !== 0 || (left && right) || keyActivity;
+    // 必须在处理松开之前取消候选, 普通键可能在同一次轮询中已经按下并松开.
+    if (chord) this.invalidateTap();
 
     if (down) {
       this.cancelRelease();
       if (this.pressed) return;
       this.pressed = true;
-      // 刚解除保持时按键还按着, 等全部松开前不再参与.
       if (this.suppress) {
-        this.lastPressAt = null;
-        this.lastPressSide = null;
+        this.invalidateTap();
         return;
       }
-      // 左右同时按下不参与双击判定, 避免被误认为同一侧连续两次.
-      const side = left && right ? null : left ? "left" : "right";
+      const side = chord ? null : left ? "left" : "right";
       const now = this.now();
       const gap = this.lastPressAt === null ? null : now - this.lastPressAt;
-      const sameSide = side !== null && this.lastPressSide === side;
-      if (sameSide && gap !== null && gap >= this.minTapGapMs && gap <= this.doubleTapMs) {
-        // 同一侧在窗口内连续按下: 切换保持.
-        this.lastPressAt = null;
-        this.lastPressSide = null;
-        this.toggleLatched();
-        return;
-      }
-      this.lastPressAt = now;
-      this.lastPressSide = side;
+      this.doubleTapPending = side !== null && this.lastPressSide === side
+        && gap !== null && gap >= this.minTapGapMs && gap <= this.doubleTapMs;
+      this.currentPressAt = now;
+      this.currentPressSide = side;
+      this.lastPressAt = null;
+      this.lastPressSide = null;
       // 保持模式下按住: 反向, 临时取消避让.
       if (this.latched) {
         if (!this.suspended) {
@@ -308,6 +333,20 @@ export class ModifierWatcher {
     if (!this.pressed) return;
     this.pressed = false;
     this.suppress = false;
+    const tap = this.currentPressSide !== null && this.currentPressAt !== null
+      && this.now() - this.currentPressAt <= this.doubleTapMs;
+    const toggle = tap && this.doubleTapPending;
+    if (tap && !toggle) {
+      this.lastPressAt = this.currentPressAt;
+      this.lastPressSide = this.currentPressSide;
+    }
+    this.currentPressAt = null;
+    this.currentPressSide = null;
+    this.doubleTapPending = false;
+    if (toggle) {
+      this.toggleLatched();
+      return;
+    }
     if (this.suspended) {
       this.suspended = false;
       this.onResume?.();
@@ -325,7 +364,7 @@ export class ModifierWatcher {
 
   toggleLatched() {
     if (this.latched) {
-      // 保持中再次双击: 解除. 按键还按着, 等全部松开前不再触发普通按住.
+      // 保持中再次完成独立双击: 解除保持.
       this.latched = false;
       this.suppress = this.pressed;
       this.suspended = false;
@@ -342,7 +381,7 @@ export class ModifierWatcher {
       this.fired = true;
       this.onPress?.();
     }
-    this.logger.info("便签避让切换为保持", { timeoutMs: this.latchTimeoutMs });
+    this.logger.info("便签避让切换为保持", { timeoutMs: this.latchTimeoutEnabled ? this.latchTimeoutMs : null });
   }
 
   armLatchTimer() {
@@ -354,6 +393,7 @@ export class ModifierWatcher {
       // 30 秒内没有再次双击, 自动取消保持.
       this.latched = false;
       this.suppress = this.pressed;
+      this.invalidateTap();
       this.releaseHold();
       this.logger.info("便签避让保持已超时自动取消");
     }, this.latchTimeoutMs);
@@ -367,8 +407,8 @@ export class ModifierWatcher {
 
   resetPressState() {
     this.pressed = false;
-    this.lastPressAt = null;
-    this.lastPressSide = null;
+    this.invalidateTap();
+    this.currentPressAt = null;
     this.latched = false;
     this.suppress = false;
     this.suspended = false;
@@ -422,13 +462,13 @@ function buildKeycodeMap(keys) {
   const map = new Map();
   const pairs = [
     [keys.Shift, 8],
-    [keys.ShiftRight, 8],
+    [keys.ShiftRight, 128],
     [keys.Ctrl, 4],
-    [keys.CtrlRight, 4],
+    [keys.CtrlRight, 64],
     [keys.Alt, 2],
-    [keys.AltRight, 2],
+    [keys.AltRight, 32],
     [keys.Meta, 1],
-    [keys.MetaRight, 1],
+    [keys.MetaRight, 16],
   ];
   for (const [code, bit] of pairs) {
     if (Number.isFinite(code)) map.set(code, bit);
