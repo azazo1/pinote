@@ -169,7 +169,7 @@ function startApplication() {
       // 否则上一张展开的便签会一直被当成正在编辑, 离开焦点后也不参与避让.
       if (window) {
         windows.markActiveWindow(window);
-        windows.setEditingWindow(window);
+        windows.setEditingWindow(window, "window-focus");
       }
       windows.cancelAppBlurHide();
     });

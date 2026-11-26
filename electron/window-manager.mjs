@@ -338,7 +338,7 @@ export class WindowManager {
 
     this.windows.set(note.id, window);
     // 窗口失焦: 该便签立刻不再算编辑中, 保持避让期间也要重新参与.
-    window.on("blur", () => this.clearEditingWindow(window));
+    window.on("blur", () => this.clearEditingWindow(window, "blur"));
     // 刚打开的窗口不参与当前这轮避让, 免得用户新建的便签立刻被推走.
     this.avoidance.release(window);
     if (process.platform === "darwin") {
@@ -411,7 +411,7 @@ export class WindowManager {
   closeNote(id) {
     const window = this.windows.get(id);
     if (window) {
-      this.clearEditingWindow(window);
+      this.clearEditingWindow(window, "close");
       this.avoidance.release(window);
     }
     if (this.store.getDockState(id) === "shelf") return this.closeDockedNote(id);
@@ -676,13 +676,15 @@ export class WindowManager {
     return BrowserWindow.getFocusedWindow();
   }
 
-  setEditingWindow(window) {
+  setEditingWindow(window, source = "unknown") {
     if (!window || window.isDestroyed?.()) return;
     this.editingWindow = window;
+    log.info("编辑窗口已更新", { source, windowId: window.id, noteId: this.noteIdForWindow(window) ?? null });
   }
 
-  clearEditingWindow(window = null) {
+  clearEditingWindow(window = null, source = "unknown") {
     if (window && this.editingWindow !== window) return;
+    if (this.editingWindow) log.info("编辑窗口已清除", { source, windowId: this.editingWindow.id });
     this.editingWindow = null;
   }
 
@@ -690,7 +692,7 @@ export class WindowManager {
     if (!window || window.isDestroyed()) return;
     // 用户每一次显式聚焦都同步更新"当前便签", 不依赖窗口系统报告 focus 状态.
     this.markActiveWindow(window);
-    this.setEditingWindow(window);
+    this.setEditingWindow(window, "focus");
     if (!window.isFocusable()) window.setFocusable(true);
     // macOS 的 panel 可在其他应用仍处于前台时成为 key window.
     // 点击勾选框这类非文本控件时 panel 可能不会自动成为键盘窗口, 因此这里强制聚焦,
@@ -1481,7 +1483,7 @@ export class WindowManager {
 
   handleApplicationBlur() {
     // 切换到其他应用: 任何便签都不再是编辑中.
-    this.clearEditingWindow();
+    this.clearEditingWindow(null, "app-blur");
     this.scheduleAppBlurHide();
   }
 

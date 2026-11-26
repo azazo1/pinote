@@ -209,6 +209,7 @@ export class AvoidanceService {
       if (!key || !window || window.isDestroyed?.() || !isVisible(window)) continue;
       if (this.excluded.has(window) || this.entries.has(key)) continue;
       const origin = window.getBounds();
+      this.logger.info("便签加入避让", { key, count: this.entries.size + 1 });
       this.entries.set(key, {
         key,
         window,
