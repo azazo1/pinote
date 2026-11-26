@@ -195,6 +195,22 @@ describe("AvoidanceService", () => {
     expect(note.ignoring).toBe(false);
   });
 
+  it("can include a released window again in the current hold", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    service.release(note);
+    expect(note.getBounds()).toEqual(noteBounds);
+
+    // 收起动画结束等场景会把窗口放回来, 下一帧重新被推开.
+    expect(service.include(note)).toBe(true);
+    advance(600);
+
+    expect(note.getBounds()).not.toEqual(noteBounds);
+    expect(insideField(note.getBounds())).toBe(false);
+  });
+
   it("keeps a released window out of the field until the next hold", () => {
     const note = createFakeWindow();
     const service = createService([note]);
@@ -257,10 +273,20 @@ describe("AvoidanceService", () => {
     expect(service.isActive()).toBe(false);
   });
 
-  it("does nothing when there are no notes", () => {
-    const service = createService([]);
+  it("keeps the field open with no notes and picks up a note that joins later", () => {
+    const targets: FakeWindow[] = [];
+    const note = createFakeWindow();
+    const service = createService(targets);
+    cursor = { x: 700, y: 500 };
 
-    expect(service.start()).toBe(false);
-    expect(service.isActive()).toBe(false);
+    // 编辑中的便签被排除时也会进入立场, 收起后自动加入, 不需要先关掉再打开.
+    expect(service.start()).toBe(true);
+    expect(service.isActive()).toBe(true);
+
+    targets.push(note);
+    advance(600);
+
+    expect(note.getBounds()).not.toEqual(noteBounds);
+    expect(insideField(note.getBounds())).toBe(false);
   });
 });

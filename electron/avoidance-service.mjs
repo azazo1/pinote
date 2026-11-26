@@ -64,10 +64,8 @@ export class AvoidanceService {
     this.phase = "field";
     this.excluded.clear();
     this.trackTargets();
-    if (this.entries.size === 0) {
-      this.phase = "idle";
-      return false;
-    }
+    // 即使当前没有可参与的窗口也保持立场: 编辑中的便签收起后, 或尺寸动画结束后,
+    // 会由 trackTargets 自动加入, 不需要先关掉再打开.
     this.lastTickAt = null;
     this.ensureLoop();
     this.logger.info("便签避让立场已开启", { count: this.entries.size });
@@ -218,6 +216,12 @@ export class AvoidanceService {
     this.excluded.add(entry.window);
     this.entries.delete(entry.key);
     this.snapEntry(entry);
+  }
+
+  // 把窗口放回当前这轮避让: 收起动画结束后调用, 收起的小条可以重新参与避让.
+  include(window) {
+    if (!window) return false;
+    return this.excluded.delete(window);
   }
 
   snapEntry(entry) {

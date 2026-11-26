@@ -511,6 +511,8 @@ export class WindowManager {
         height: COLLAPSED_HEIGHT,
       }, WINDOW_ANIMATION_MS, () => {
         window.setResizable(false);
+        // 收起完成后把便签放回避让: 编辑中双击进入保持, 再收起的小条也应该让开.
+        this.avoidance.include(window);
       });
     } else {
       const target = {
