@@ -174,16 +174,18 @@ export class AvoidanceService {
   }
 
   // 当前所有立场: 鼠标, 以及启用且可读时的文本插入点.
+  // 两者几乎重合时只保留光标立场, 免得同一块区域被推两次.
   currentFields() {
-    const fields = [];
     const mouse = avoidanceField(this.getCursor());
-    if (mouse) fields.push(mouse);
+    let caretField = null;
     if (this.isCaretEnabled()) {
       const caret = this.getCaret();
-      const caretField = caret ? avoidanceFieldFromRect(caret) : null;
-      if (caretField) fields.push(caretField);
+      caretField = caret ? avoidanceFieldFromRect(caret) : null;
     }
-    return fields;
+    if (!mouse) return caretField ? [caretField] : [];
+    if (!caretField) return [mouse];
+    const distance = Math.hypot(caretField.x - mouse.x, caretField.y - mouse.y);
+    return distance < mouse.radius ? [caretField] : [mouse, caretField];
   }
 
   // 目标位置: 始终按"原位"算出所有立场外的最小旁位, 不按当前位置累加.

@@ -99,6 +99,10 @@
         {
           "from": "build/generated/mac-modifier-state",
           "to": "mac-modifier-state"
+        },
+        {
+          "from": "build/generated/pinote-ax.node",
+          "to": "pinote-ax.node"
         }
       ]
     },
