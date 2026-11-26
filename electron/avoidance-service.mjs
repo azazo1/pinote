@@ -199,13 +199,16 @@ export class AvoidanceService {
       if (!originBlocked && !currentBlocked) return entry.origin;
       entry.avoiding = true;
     }
-    if (!currentBlocked && !releaseFields.some((field) => rectIntersectsCircle(entry.origin, field))) {
+    // 回位只看原位: 原位已离开立场 (含去抖圈) 就必须回原位.
+    // 之前要求"当前位置也不在立场内"才回位, 推位若被边缘挡在立场边上, 便签会一直停在那里.
+    const originInRelease = releaseFields.some((field) => rectIntersectsCircle(entry.origin, field));
+    if (!originInRelease) {
       entry.avoiding = false;
       entry.target = entry.origin;
       return entry.origin;
     }
-    // 原位仍在立场里: 推开; 原位只在去抖圈内时保持上次的让位位置, 避免边缘来回抖.
-    if (originBlocked) {
+    // 原位仍在立场/去抖圈内: 推开; 推位若还压在立场里, 也重新按原位推.
+    if (originBlocked || currentBlocked) {
       const pushed = this.pushFrom(entry, entry.origin, fields);
       if (pushed) return pushed;
     }

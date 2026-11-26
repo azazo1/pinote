@@ -227,6 +227,22 @@ describe("AvoidanceService", () => {
     expect(note.getBounds()).toEqual(noteBounds);
   });
 
+  it("returns to origin when the pointer leaves even if the pushed position still overlaps", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(400);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+
+    // 模拟推位被边缘挡住, 停在仍与立场相交的位置; 此时原位已经远离立场.
+    note.setBounds({ x: 600, y: 100, width: 253, height: 220 });
+    cursor = { x: 700, y: 20 };
+    advance(600);
+
+    expect(note.getBounds()).toEqual(noteBounds);
+  });
+
   it("resumes avoidance after a note released on focus loses focus", () => {
     const note = createFakeWindow();
     const service = createService([note]);
