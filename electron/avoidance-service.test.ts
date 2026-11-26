@@ -227,6 +227,23 @@ describe("AvoidanceService", () => {
     expect(note.getBounds()).toEqual(noteBounds);
   });
 
+  it("resumes avoidance after a note released on focus loses focus", () => {
+    const note = createFakeWindow();
+    const service = createService([note]);
+    cursor = { x: 700, y: 500 };
+    service.start();
+    advance(400);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+
+    focused = note;
+    advance(120);
+    expect(note.getBounds()).toEqual(noteBounds);
+
+    focused = null;
+    advance(600);
+    expect(note.getBounds()).not.toEqual(noteBounds);
+  });
+
   it("stops pushing while suspended and resumes afterwards", () => {
     const note = createFakeWindow();
     const service = createService([note]);

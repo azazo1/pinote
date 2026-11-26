@@ -167,7 +167,12 @@ function startApplication() {
       if (quitStarted) return;
       windows.handleBrowserWindowBlur(window);
     });
-    app.on("browser-window-focus", () => windows.cancelAppBlurHide());
+    app.on("browser-window-focus", (_event, window) => {
+      // 焦点换到别的窗口 (主窗口/另一张便签) 时同步"最近操作窗口",
+      // 否则上一张展开的便签会一直被当成正在编辑, 离开焦点后也不参与避让.
+      if (window) windows.markActiveWindow(window);
+      windows.cancelAppBlurHide();
+    });
     if (process.platform === "darwin") {
       app.on("did-resign-active", () => windows.handleApplicationBlur());
       app.on("did-become-active", () => windows.cancelAppBlurHide());

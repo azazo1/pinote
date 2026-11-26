@@ -47,6 +47,8 @@ export class AvoidanceService {
     this.suspended = false;
     this.entries = new Map();
     this.excluded = new Set();
+    // 因为获得焦点而被放回原位的窗口; 失焦后要恢复参与避让.
+    this.focusReleased = new Set();
     this.loopTimer = null;
     this.settleDeadline = 0;
     this.lastTickAt = null;
@@ -70,6 +72,7 @@ export class AvoidanceService {
     this.phase = "field";
     this.suspended = false;
     this.excluded.clear();
+    this.focusReleased.clear();
     this.trackTargets();
     // 即使当前没有可参与的窗口也保持立场: 编辑中的便签收起后, 或尺寸动画结束后,
     // 会由 trackTargets 自动加入, 不需要先关掉再打开.
@@ -130,6 +133,7 @@ export class AvoidanceService {
     const factor = 1 - Math.exp(-Math.min(elapsed, 64) / this.smoothTauMs);
     const fields = this.phase === "field" ? this.currentFields() : [];
     const focused = this.getFocusedWindow() ?? null;
+    this.restoreFocusReleasedWindows(focused);
     let moving = false;
 
     for (const entry of [...this.entries.values()]) {
@@ -265,8 +269,24 @@ export class AvoidanceService {
 
   releaseEntry(entry) {
     this.excluded.add(entry.window);
+    this.focusReleased.add(entry.window);
     this.entries.delete(entry.key);
     this.snapEntry(entry);
+  }
+
+  // 因聚焦被放回原位的窗口, 一旦不再是"编辑中" (失焦或收起) 就恢复参与避让.
+  // 用户显式操作 (拖动/收起/关闭) 造成的排除不走这里, 仍然保持到本轮结束.
+  restoreFocusReleasedWindows(editingWindow) {
+    if (this.focusReleased.size === 0) return;
+    for (const window of [...this.focusReleased]) {
+      if (!window || window.isDestroyed?.()) {
+        this.focusReleased.delete(window);
+        continue;
+      }
+      if (window === editingWindow) continue;
+      this.focusReleased.delete(window);
+      this.excluded.delete(window);
+    }
   }
 
   // 把窗口放回当前这轮避让: 收起动画结束后调用, 收起的小条可以重新参与避让.
@@ -307,6 +327,7 @@ export class AvoidanceService {
     this.lastTickAt = null;
     this.entries.clear();
     this.excluded.clear();
+    this.focusReleased.clear();
     this.logger.info("便签避让已结束");
   }
 }
