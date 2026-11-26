@@ -34,7 +34,7 @@ const MACOS_WORKSPACE_OPTIONS = {
 };
 
 export class WindowManager {
-  constructor(store, { requestQuit, showDock, hideDock, isAppActive } = {}) {
+  constructor(store, { requestQuit, showDock, hideDock, isAppActive, getCaret, isCaretEnabled } = {}) {
     this.store = store;
     this.requestQuit = requestQuit;
     this.showDock = showDock;
@@ -69,6 +69,8 @@ export class WindowManager {
       getTargets: () => this.avoidanceTargetCandidates(),
       getCursor: () => screen.getCursorScreenPoint(),
       getFocusedWindow: () => this.getAvoidanceEditingWindow(),
+      getCaret: getCaret ?? (() => null),
+      isCaretEnabled: isCaretEnabled ?? (() => false),
       displayFor: (bounds) => {
         const display = screen.getDisplayMatching(bounds);
         return { bounds: display.bounds, workArea: display.workArea };

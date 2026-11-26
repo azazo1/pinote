@@ -77,6 +77,31 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
     }
   }
 
+  async function updateAvoidanceCaret(enabled: boolean) {
+    setBusy("avoidance");
+    setAvoidanceError("");
+    try {
+      onSettings(await window.noteAPI.updateAvoidanceCaret(enabled));
+    } catch (reason) {
+      setAvoidanceError(errorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function requestAccessibility() {
+    setBusy("avoidance");
+    setAvoidanceError("");
+    try {
+      await window.noteAPI.requestAccessibilityPermission();
+      onSettings(await window.noteAPI.getAppSettings());
+    } catch (reason) {
+      setAvoidanceError(errorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateAvoidanceLatch(enabled: boolean) {
     setBusy("avoidance");
     setAvoidanceError("");
@@ -223,6 +248,42 @@ export function ShortcutSettingsSection({ shortcuts, avoidance, platform, onSett
               />
               <span>{avoidance.latchTimeout ? "开启" : "关闭"}</span>
             </label>
+          </div>
+          <div className="shortcut-row shortcut-row-single shortcut-row-child">
+            <div className="shortcut-name">
+              <strong>文本光标避让</strong>
+              <span className="shortcut-hint">
+                输入光标附近也形成立场; 需要辅助功能权限, 仅对标准文本控件有效
+              </span>
+            </div>
+            <label className="shortcut-toggle">
+              <input
+                type="checkbox"
+                checked={avoidance.caretEnabled}
+                disabled={busy !== null}
+                onChange={(event) => void updateAvoidanceCaret(event.target.checked)}
+              />
+              <span>{avoidance.caretEnabled ? "开启" : "关闭"}</span>
+            </label>
+          </div>
+          <div className="shortcut-row shortcut-row-single shortcut-row-child">
+            <div className="shortcut-name">
+              <span className="shortcut-hint">
+                {avoidance.caretTrusted === null
+                  ? "辅助功能权限: 尚未检测"
+                  : avoidance.caretTrusted
+                    ? "辅助功能权限: 已授予"
+                    : "辅助功能权限: 未授予, 光标避让不会生效"}
+              </span>
+            </div>
+            <button
+              className="settings-text-command"
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void requestAccessibility()}
+            >
+              申请辅助功能权限
+            </button>
           </div>
         </div>
       </section>

@@ -35,6 +35,7 @@ export class ModifierWatcher {
     onRelease,
     onSuspend,
     onResume,
+    onAccessibilityChange,
     logger = { info() {}, warn() {} },
     holdDelayMs = AVOIDANCE_HOLD_DELAY_MS,
     releaseDebounceMs = AVOIDANCE_RELEASE_DEBOUNCE_MS,
@@ -55,6 +56,7 @@ export class ModifierWatcher {
     this.onRelease = onRelease;
     this.onSuspend = onSuspend;
     this.onResume = onResume;
+    this.onAccessibilityChange = onAccessibilityChange;
     this.logger = logger;
     this.holdDelayMs = holdDelayMs;
     this.releaseDebounceMs = releaseDebounceMs;
@@ -78,6 +80,8 @@ export class ModifierWatcher {
     this.lastPressAt = null;
     this.lastPressSide = null;
     this.deviceSidesAvailable = true;
+    this.accessibilityTrusted = null;
+    this.caretRect = null;
     this.fired = false;
     this.latched = false;
     this.suppress = false;
@@ -89,6 +93,16 @@ export class ModifierWatcher {
 
   get modifierLabel() {
     return avoidanceModifierLabel(this.modifier, this.platform);
+  }
+
+  // 当前能否读取系统焦点元素的文本插入点 (辅助功能权限是否已授予).
+  getAccessibilityTrusted() {
+    return this.accessibilityTrusted;
+  }
+
+  // 最近一次读到的文本插入点矩形 (屏幕坐标), 读不到时为 null.
+  getCaretRect() {
+    return this.caretRect ? { ...this.caretRect } : null;
   }
 
   async start() {
@@ -189,6 +203,26 @@ export class ModifierWatcher {
           this.logger.warn("当前 macOS 版本或键盘不提供左右修饰键区分, 双击无法保证同一侧");
           return;
         }
+        if (text.startsWith("a")) {
+          const trusted = text === "a1";
+          if (trusted !== this.accessibilityTrusted) {
+            this.accessibilityTrusted = trusted;
+            this.logger.info("辅助功能权限状态更新", { trusted });
+            this.onAccessibilityChange?.(trusted);
+          }
+          return;
+        }
+        if (text.startsWith("c")) {
+          if (text === "c") {
+            this.caretRect = null;
+            return;
+          }
+          const parts = text.slice(1).split(",").map((part) => Number.parseInt(part, 10));
+          if (parts.length === 4 && parts.every((part) => Number.isFinite(part))) {
+            this.caretRect = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+          }
+          return;
+        }
         if (text.startsWith("p")) {
           // helper 的权限预检: p1 表示已授予输入监控, p0 表示未授予.
           this.inputMonitoringGranted = text === "p1";
@@ -216,6 +250,8 @@ export class ModifierWatcher {
         this.latched = false;
         this.lastPressAt = null;
         this.lastPressSide = null;
+        this.accessibilityTrusted = null;
+        this.caretRect = null;
         this.clearLatchTimer();
         this.releaseHold();
         this.logger.warn("便签避让 helper 已退出", { code, signal });
